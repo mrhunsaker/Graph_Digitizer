@@ -118,6 +118,10 @@ mutable struct AppState
     # Non-blocking calibration fields
     calibration_mode::Bool
     calib_clicks::Vector{Tuple{Float64,Float64}}
+    # Previous scale/offset snapshot (used to re-map calibration anchors on resize)
+    previous_display_scale::Float64
+    previous_offset_x::Float64
+    previous_offset_y::Float64
 end
 
 # --------------------------
@@ -991,6 +995,49 @@ Intended to be called from a canvas draw callback. The function expects the
 Cairo context `cr` and the `AppState` describing current application state.
 """
 function draw_canvas(state::AppState, cr)
+    # Before any drawing that depends on calibration anchors, detect scale/offset changes
+    # and re-map stored calibration pixel anchors so they stay visually attached to the image
+    # instead of drifting when the window is moved or resized.
+    if state.img_surface !== nothing
+        # Compute prospective new scale & offsets (duplicate logic used later)
+        cw = Gtk.width(state.canvas)
+        ch = Gtk.height(state.canvas)
+        if cw > 0 && ch > 0 && state.img_w > 0 && state.img_h > 0
+            new_scale = compute_display_scale(state)
+            tx = (cw - state.img_w * new_scale) / 2.0
+            ty = (ch - state.img_h * new_scale) / 2.0
+            scale_changed = new_scale != state.previous_display_scale
+            offset_changed = (tx != state.previous_offset_x) || (ty != state.previous_offset_y)
+            if (scale_changed || offset_changed) && state.previous_display_scale > 0
+                # λ maps a previous anchor (ax, ay) from old to new canvas coords
+                function _remap(ax::Float64, ay::Float64)
+                    # Translate back to unscaled image coordinates using previous transform
+                    ux = (ax - state.previous_offset_x) / state.previous_display_scale
+                    uy = (ay - state.previous_offset_y) / state.previous_display_scale
+                    # Forward map with new transform
+                    nx = tx + ux * new_scale
+                    ny = ty + uy * new_scale
+                    return (nx, ny)
+                end
+                if state.px_xmin !== nothing
+                    state.px_xmin = _remap(state.px_xmin[1], state.px_xmin[2])
+                end
+                if state.px_xmax !== nothing
+                    state.px_xmax = _remap(state.px_xmax[1], state.px_xmax[2])
+                end
+                if state.px_ymin !== nothing
+                    state.px_ymin = _remap(state.px_ymin[1], state.px_ymin[2])
+                end
+                if state.px_ymax !== nothing
+                    state.px_ymax = _remap(state.px_ymax[1], state.px_ymax[2])
+                end
+            end
+            # Update snapshot (done even if unchanged so first pass initializes them)
+            state.previous_display_scale = new_scale
+            state.previous_offset_x = tx
+            state.previous_offset_y = ty
+        end
+    end
     Cairo.set_source_rgb(cr, 1, 1, 1)
     Cairo.paint(cr)
     if state.image === nothing || state.img_surface === nothing
@@ -2022,7 +2069,9 @@ function create_app()
         38.0,          # zoom_radius_px (approx 1 cm at ~96 DPI)
         6.0,           # zoom_level
         false,         # modal_active
-        false, Tuple{Float64,Float64}[])
+        false, Tuple{Float64,Float64}[],
+        # previous_display_scale / previous_offset_x / previous_offset_y
+        1.0, 0.0, 0.0)
 
     for i in 1:MAX_DATASETS
         ds = Dataset("Dataset $i", DEFAULT_COLORS[i], hex_to_rgb(DEFAULT_COLORS[i]), Tuple{Float64,Float64}[])
