@@ -8,6 +8,8 @@ This document collects focused, per-function documentation for the key functiona
 
 Use this reference to understand function signatures, expected state, examples, and important caveats. These functions are defined in `src/graph_digitizer.jl`.
 
+This documentation is written with Windows and Linux users in mind; platform-specific notes focus on common Windows/Linux behaviors (for example, file chooser fallbacks and GTK runtime availability). Where the behavior differs on other platforms a generic note is provided, but Windows/Linux guidance is emphasized.
+
 ---
 
 ## Table of contents
@@ -151,7 +153,7 @@ Signature:
 - `safe_save_dialog(state::AppState, title::AbstractString, parent, patterns::Vector{String}) -> String`
 
 Purpose:
-- Show a robust save dialog. If a native Save dialog cannot be made, returns a sensible fallback path (Downloads or temp) and updates `state.status_label`.
+- Show a robust save dialog. If a native Save dialog cannot be made, returns a sensible fallback path (for example, the user's `Downloads` folder on Windows and Linux) and updates `state.status_label` to inform the user where the file was written.
 
 Inputs & returns:
 - Same parameters as `safe_open_dialog`.

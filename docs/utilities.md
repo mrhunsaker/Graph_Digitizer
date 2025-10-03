@@ -3,6 +3,8 @@
 This document describes the utility functions and small helpers used across the Graph Digitizer application. It documents purpose, behavior, signatures, and short usage examples for each helper. These utilities include color parsing, coordinate transforms, file-name helpers, safe dialog helpers, and small canvas drawing helpers used by the GUI.
 
 > Note: Examples in this document are illustrative snippets showing how a function is typically used in the app. They assume `state::AppState` is available.
+>
+> This documentation and the examples are written with Windows and Linux systems in mind. Platform-specific guidance (for example, file chooser fallbacks and GTK runtime installation) references Windows/Linux behavior; where other platforms behave differently a generic note is given but Windows/Linux instructions are emphasized.
 
 ---
 
@@ -104,9 +106,9 @@ Compute a uniform scale factor so the image fits into the canvas while preservin
 
 ### _preferred_downloads_dir() -> String
 
-Return the user's Downloads directory where available, otherwise `tempdir()`.
+Return the user's Downloads directory when available (on Windows and Linux); otherwise fall back to `tempdir()`.
 
-- Used by safe save fallbacks to choose a reasonable output folder if a file chooser is unavailable.
+- Used by safe save fallbacks to choose a reasonable output folder if a file chooser is unavailable. On Windows and Linux this will typically prefer the user's `Downloads` folder; when that is not present or writable the system temporary directory is used.
 
 ---
 
@@ -157,9 +159,9 @@ Robust file-open helper that attempts several Gtk APIs to create a file chooser.
 
 ### safe_save_dialog(state::AppState, title::String, parent, patterns::Vector{String}) -> String
 
-Robust save helper. If a native Save dialog cannot be created the function will attempt to return a sensible fallback path (using the image title / timestamp in the Downloads directory) and updates `state.status_label`.
+Robust save helper. If a native Save dialog cannot be created the function will attempt to return a sensible fallback path (for example, using the image title / timestamp in the user's `Downloads` folder on Windows and Linux) and updates `state.status_label` to inform the user where the file was written.
 
-- Returns chosen filename or fallback path, or `""` on error/cancel.
+- Returns the chosen filename or a fallback path (typically in `Downloads` on Windows/Linux or the system temporary directory), or `""` on error/cancel.
 
 ---
 

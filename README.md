@@ -5,7 +5,7 @@ GraphDigitizer is a small interactive GUI tool (Julia + Gtk) for extracting nume
 
 Version
 -------
-See `Project.toml` for the packaged version (0.9.0). The runtime binary identifies itself via constants in `src/graph_digitizer.jl`.
+See `Project.toml` for the packaged version (1.0.0). The runtime binary identifies itself via constants in `src/graph_digitizer.jl`.
 
 Quick links
 -----------

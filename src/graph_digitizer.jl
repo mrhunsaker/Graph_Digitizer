@@ -33,7 +33,7 @@ using Dates
 # --------------------------
 # Constants & Types
 # --------------------------
-const APP_VERSION = "0.1.0"
+const APP_VERSION = "1.0.0"
 const MAX_DATASETS = 6
 const DEFAULT_COLORS = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#F0E442", "#56B4E9"]
 

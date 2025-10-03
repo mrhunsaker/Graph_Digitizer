@@ -1,6 +1,6 @@
 # Graph Digitizer — Types Reference
 
-This document describes the primary types used by Graph Digitizer, their fields, and example usage patterns. It is intended for developers who want to extend the application, script programmatic interactions, or understand the in-memory data model.
+This document describes the primary types used by Graph Digitizer, their fields, and example usage patterns. It is intended for developers who want to extend the application, script programmatic interactions, or understand the in-memory data model. This documentation and the examples are written with Windows and Linux users in mind; platform-specific guidance in this file emphasizes Windows/Linux behaviors (for example, file chooser fallbacks and GTK runtime installation).
 
 ## Dataset
 

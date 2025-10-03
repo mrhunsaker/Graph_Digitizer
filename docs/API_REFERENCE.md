@@ -1,6 +1,6 @@
 # Graph_Digitizer API Reference
 
-This document is an extracted API reference for the Graph Digitizer application. It summarizes the public types and primary functions defined in `src/graph_digitizer.jl`. The descriptions are derived from the docstrings present in the source and intended to help consumers of the code understand available primitives and how to use them.
+This document is an extracted API reference for the Graph Digitizer application. It summarizes the public types and primary functions defined in `src/graph_digitizer.jl`. The descriptions are derived from the docstrings present in the source and intended to help consumers of the code understand available primitives and how to use them. The guidance and platform-specific notes in this reference are written with Windows and Linux systems in mind.
 
 Quick links
 - Source: `src/graph_digitizer.jl`
@@ -251,8 +251,7 @@ Returns:
 
 Show a safe file-save dialog and return the selected filename.
 
-- If a native dialog can't be constructed, returns a sensible fallback path
-  (Downloads or temp) and updates the status label.
+- If a native dialog can't be constructed, returns a sensible fallback path (for example, the user's `Downloads` folder on Windows and Linux, or the system temporary directory) and updates the status label to inform the user where the file was written.
 - Sets `state.modal_active` during operation.
 
 Arguments:
@@ -478,7 +477,7 @@ Returns:
 - Calibration: the app expects four calibration clicks in the order: X-left pixel, X-right pixel, Y-bottom pixel, Y-top pixel. After clicking, numeric axis min/max values must be entered and "Apply Calibration" pressed.
 - Auto-trace: use a dataset's `color` value (hex) as the target color for `auto_trace_scan`. The result replaces that dataset's `points`.
 - Save/Export: JSON and CSV save helpers exist; `safe_save_dialog` will fallback to the user's Downloads directory when a file chooser dialog cannot be shown (for headless or constrained environments).
-- The API documented here is primarily aimed at developers who want to script or extend the GUI or reuse cores of the logic (calibration mapping, image surface bridging, auto-trace algorithm).
+- The API documented here is primarily aimed at developers who want to script or extend the GUI or reuse cores of the logic (calibration mapping, image surface bridging, auto-trace algorithm). Platform-specific notes and examples within this reference are oriented toward Windows and Linux environments; where platform behavior differs (file chooser fallbacks, system GTK availability), Windows/Linux guidance is emphasized.
 
 ---
 
