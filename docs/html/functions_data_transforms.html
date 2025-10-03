@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <</head>meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Graph_Digitizer</title> — Data Transforms, Dialogs & Drawing</title>
+  <meta name="description" content="Function-level documentation: coordinate transforms, safe dialogs, and drawing helpers for Graph_Digitizer." />
+  <style>
+    :root{</style>
+      --bg: #f7f8fb;
+      --card: #ffffff;
+      --muted: #6b7280;
+      --accent: #0b66c2;
+      --border: #e6e9ef;
+      --mono: Menlo, Monaco, "Courier New", monospace;
+      --content-max: 980px;
+    }
+    html,body{height:100%; margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; color:#111827; background:var(--bg);}
+    .wrap{display:flex; gap:24px; padding:24px; box-sizing:border-box; align-items:flex-start;}
+    nav{width:260px; flex:0 0 260px; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:16px; box-shadow:0 4px 16px rgba(15,23,42,0.03); height:fit-content;}
+    nav h2{margin:0 0 8px 0; font-size:16px; color:var(--accent)}
+    nav a{display:block; color:var(--accent); text-decoration:none; padding:6px 0; border-radius:4px}
+    nav a:hover{background: rgba(11,102,194,0.06)}
+    main{flex:1 1 auto; max-width:var(--content-max)}
+    .card{background:var(--card); border:1px solid var(--border); border-radius:8px; padding:24px; box-shadow:0 6px 24px rgba(15,23,42,0.04)}
+    header.page-title{margin-bottom:12px}
+    header.page-title h1{margin:0; font-size:22px}
+    header.page-title p{margin:8px 0 0 0; color:var(--muted); font-size:14px}
+    .md-body{line-height:1.65; color:#111827}
+    .md-body h2 { margin-top:1.2em; }
+    .md-body pre{background:#0f1724; color:#e6eef8; padding:12px; border-radius:6px; overflow:auto; font-family:var(--mono)}
+    .md-body code{background:#f3f4f6; padding:0.15em 0.35em; border-radius:4px; font-family:var(--mono); font-size:0.95em}
+    .muted{color:var(--muted)}
+    .kbd{display:inline-block; padding:4px 8px; border-radius:6px; background:#111827; color:#fff; font-family:var(--mono); font-size:13px}
+    footer.notes{margin-top:18px; color:var(--muted); font-size:13px}
+    table.api{width:100%; border-collapse:collapse; margin:12px 0;}
+    table.api th, table.api td{border:1px solid #ecedf2; padding:8px 10px; text-align:left}
+    @media (max-width:900px){.wrap{flex-direction:column; padding:16px} nav{width:100%; order:2} main{order:1}}
+  </style>
+</head>
+<body>
+  <</body>div class="wrap" role="main">
+    <nav aria-label="Documentation navigation">
+      <h2>Graph_Digitizer —</h2> Docs</h2>
+      <a href="index.html">Docs Home</a>
+      <a href="api_reference.html">API Reference</a>
+      <a href="functions_data_transforms.html" aria-current="page">Data Transforms & Drawing</a>
+      <a href="types.html">Types</a>
+      <a href="utilities.html">Utilities</a>
+      <hr style="border:none; border-top:1px dashed var(--border); margin:12px 0;">
+      <div class="muted" style="font-size:13px;">
+        This page is a static, pre-rendered HTML version of the functions-level documentation. If you maintain these docs, regenerate from the source Markdown when updating.
+      </div>
+    </nav>
+
+    <main>
+      <div class</main>="card">
+        <header class="page-title">
+          <h1>Data</h1> Transforms, Dialogs & Drawing (Function Reference)</h1>
+          <p class="muted">Focused, per-function documentation for transforms, safe dialogs, and drawing helpers used by the application.</p>
+        </header>
+
+        <article class="md-body">
+          <p>This document collects focused, per-function documentation for the key functional areas:</p>
+          <ul>
+            <li>Data</ul></li> transforms (coordinate mapping between image/data and canvas)</li>
+            <li>Safe file</li> dialogs and focus helpers</li>
+            <li></li>Drawing helpers (magnifier and precision zoom)</li>
+            <li>A minimal `index.html` snippet to link this doc from a static docs site</li>
+          </ul>
+
+          <h2></h2>Table of contents</h2>
+          <ul></ul>
+            <li>Data</li> transforms
+              <ul></ul>
+                <li><a href="#data_to_canvas">data_to_canvas(state, dx, dy)</a></li>
+                <li><a href="#canvas_to_data">canvas_to_data(state, cx, cy)</a></li>
+              </ul>
+            </li>
+            <li>Safe dialogs</li> & focus helpers
+              <ul>
+                <li><</ul>a href="#get_focus_safe">_get_focus_safe(win)</a></li>
+                <li><a href="#safe_open_dialog">safe_open_dialog(...)</a></li>
+                <li><a href="#safe_save_dialog">safe_save_dialog(...)</a></li>
+              </ul>
+            </li>
+            <li>Drawing</li> helpers
+              <ul></ul>
+                <li><a href="#draw_magnifier">draw_magnifier(...)</a></li>
+                <li><a href="#draw_zoom_circle">draw_zoom_circle(...)</a></li>
+                <li><a href="#draw_canvas">draw_canvas(...)</a> (notes on zoom overlay)</li>
+              </ul>
+            </li>
+            <li>Static docs index (HTML</li> snippet)</li>
+          </ul>
+
+          <hr>
+
+          <h2 id="data_to_canvas">Data transforms</h2>
+          <p>These functions convert coordinates</p> between the application's data-space (user/X-Y values) and canvas pixel coordinates used for drawing and hit-testing. They depend on the calibration anchors recorded by the user.</p>
+
+          <h3 id="data_to_canvas">data_to_canvas(state, dx, dy)</h3>
+          <p><strong>Signature</strong>:</strong> <code>data</code>_to_canvas(state::AppState, dx::Float64, dy::Float64) -> (px::Float64, py::Float64)</code></p>
+          <p><strong></strong>Purpose:</strong></p>
+          <ul></ul>
+            <li>Convert a data-space</li> point (<code>dx</code</code>>, <code>dy</code>) into</code> canvas pixel coordinates for drawing.</li>
+            <li>Returns <code>(</li>0.0, 0.0)</code> if calibration anchors are missing.</li>
+          </ul>
+          <p><strong>Inputs:</strong</strong>> <code>state</code</code>> — AppState containing calibration anchors:
+            <code>px_xmin</</code>code>, <code>px_x</code>max</code>, <code></code>px_ymin</code>, <code>px_ymax</code</code>> (canvas pixel tuples),
+            numeric axis ranges <code>x_min</code>, <code>x_max</code>, <code></code>y_min</code>, <code>y_max</code</code>>, and booleans <code>x_log</code>, <code>y</code>_log</code>.</p>
+          <p><strong></strong>Behavior:</strong> Linear axes use simple interpolation between pixel anchors and numeric ranges. Log axes use base-10 transforms (safe-clamped for non-positive inputs). Produces canvas X by interpolating between <code>px_xmin[1</code>]</code> and <code>px_xmax</code>[1]</code>; canvas Y from <code>px</code>_ymin[2]</code> to <code>px</code>_ymax[2]</code>.</p>
+          <p><strong>Edge cases:</</strong>strong> Non-positive values on log axes are clamped to avoid NaNs. Missing anchors return <code>(0,0)</code>.</p>
+          <p><strong>Example</strong></p></strong>
+          <pre><code></code>px, py = data_to_canvas(state, 12.3, 45.6)
+# px, py can be fed directly to Cairo drawing APIs</code></pre>
+          <p><strong>Testing tip:</</strong>strong> roundtrip tests with <code></code>canvas_to_data</code> (below).</p>
+
+          <h3 id="canvas_to_data">canvas_to_data(state, cx, cy)</h3>
+          <p><strong>Signature:</strong> <</strong>code>canvas_to_data(state::AppState, cx::Float64, cy::Float64) -> (dx::Float64, dy::Float64)</code></p>
+          <p><strong></strong>Purpose:</strong> Convert canvas pixel coordinates (<code>cx</</code>code>, <code>cy</</code>code>) to data values (<code>x</code>, <code>y</</code>code>). This is the inverse of <code>data_to_canvas</</code>code> with equivalent handling of log axes.</p>
+          <p><strong>Behavior</strong>:</strong> Computes interpolation fractions along pixel anchors and maps to numeric ranges. For log axes uses exponentiation of the interpolated log values. Returns <code>(0,0)</code> if calibration anchors are missing; avoids division-by-zero on zero-length anchors.</p>
+          <p><strong>Example</strong></p</strong>>
+          <pre><code>xval, yval = canvas_to_data(state, event.x, event.y)
+push!(state.datasets[state.active_dataset].points, (xval, yval))</code></pre>
+
+          <hr>
+
+          <h2></h2>Safe dialogs & focus helpers</h2>
+          <p></p>Helpers are defensive to accommodate multiple platforms and Gtk.jl versions; they expose safe fallbacks and set <code>state.modal</code>_active</code> while active so other code can avoid re-entrancy.</p>
+
+          <h3 id="get_focus_safe">_get_focus_safe(win)</h3>
+          <p><strong>Signature</strong>:</strong> <code></code>_get_focus_safe(win) -> widget_or_nothing</code></p>
+          <p>Wraps focus queries</p> in a try/catch and returns <code>nothing</code</code>> on error. Useful when querying focus might throw on some Gtk versions or window states.</p>
+
+          <h3 id="safe_open_dialog">safe_open_dialog(state, title, parent, patterns)</h3>
+          <p><strong>Signature:</strong</strong>> <code>safe_open</code>_dialog(state::AppState, title::AbstractString, parent, patterns::Vector{String}) -> String</code></p>
+          <p>Shows a</p> robust file-open dialog. If a native dialog cannot be created, returns an empty string. Sets <code></code>state.modal_active = true</code> while active and always clears it in a <code>finally</code></code> block.</p>
+          <p><strong></strong>Notes:</strong> <code></code>patterns</code> is a vector like <code>["</code>*.png", "*.jpg"]</code>. Use the returned absolute filename when non-empty.</p>
+
+          <h3 id="safe_save_dialog">safe_save_dialog(state, title, parent, patterns)</h3>
+          <p><strong>Signature:</strong> <</strong>code>safe_save_dialog(state::AppState, title::AbstractString, parent, patterns::Vector{String}) -> String</code></p>
+          <p>Shows a robust save</p> dialog. If a native Save dialog can't be constructed, returns a sensible fallback path (Downloads or <code></code>tempdir()</code>) and updates the <code>state.status_label</code>. Attempts</code> to infer file extension from <code>patterns</code>.</p</code>>
+
+          <hr>
+
+          <h2>Drawing helpers</</h2>h2>
+          <p>Drawing helpers implement UI nicet</p>ies (magnifier) and the precision circular zoom (Alt+Z) for pixel-level placement. All drawing helpers expect a valid Cairo context (<code>cr</code></code>).</p>
+
+          <h3 id="draw_magnifier">draw_magnifier(state, cr, x, y)</h3>
+          <p><strong></strong>Signature:</strong> <code>draw_magnifier(state::</code>AppState, cr, x::Float64, y::Float64)</code></p>
+          <p>Draws a small rectangular magn</p>ifier preview near (<code>x</code>, <code>y</</code>code>) showing a zoomed portion of the image. Requires <code>state</code>.img_surface</code> and respects <code>state.display_scale</</code>code>. The preview has a white background and thin border for readability.</p>
+
+          <h3 id="draw_zoom_circle">draw_zoom_circle(state, cr, cx, cy)</h3>
+          <p><strong>Signature:</strong></strong> <code>draw</code>_zoom_circle(state::AppState, cr, cx::Float64, cy::Float64)</code></p>
+          <p>Draws a</p> circular precision zoom overlay centered at (<code>cx</code</code>>, <code>cy</</code>code>) with an approximate physical radius (~1 cm) in canvas pixels and magnifies the pixels inside the circle. The region is clipped to the circle and a guide outline is drawn. Parameters that control behavior include <code>state</code>.zoom_radius_px</code> and <code>state.zoom_level</code></code>.</p>
+          <p><strong>Interaction model</strong>:</strong> Alt+Z toggles <code>state.zoom_mode</code></code> and sets <code></code>state.zoom_center</code>. Moving the mouse updates the center; clicking while zoom mode is active places a point at the overlay center (converted back via <code></code>canvas_to_data</code>).</p>
+
+          <h3 id="draw_canvas">draw_canvas(state, cr) — Notes re: zoom overlay</h3>
+          <p>The main canvas renderer is responsible for painting the image (scaled and offset), drawing calibration anchors and overlays, rendering dataset points (via <code>data</code>_to_canvas</code>), and conditionally drawing the precision zoom overlay and magnifier preview. Keep heavy computation out of the paint callback and precompute <code>state.display</code>_scale</code> and offsets when possible.</p>
+
+          <hr>
+
+          <h2>Index HTML (simple</h2> template)</h2>
+          <p>If you want a tiny static HTML index page to link the generated markdown docs (<code></code>docs/API_REFERENCE.md</code>, <code>docs</code>/types.md</code>, <code>docs/utilities.md</code></code>, <code></code>docs/functions_data_transforms.md</code>, etc.), here is a minimal example you can drop into <code>docs/index.html</code></code>:</p>
+
+          <pre><code>&lt;!doctype html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+  &lt;meta charset="utf-8" /&gt;
+  &lt;title&gt;Graph Digitizer Docs&lt;/title&gt;
+  &lt;meta name="viewport" content="width=device-width,initial-scale=1" /&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;h1&gt;Graph Digitizer — Documentation&lt;/h1&gt;
+  &lt;nav&gt;
+    &lt;ul&gt;
+      &lt;li&gt;&lt;a href="API_REFERENCE.md"&gt;API Reference&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href="types.md"&gt;Types&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href="utilities.md"&gt;Utilities&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href="functions_data_transforms.md"&gt;Data Transforms &amp; Drawing&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/nav&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+
+          <p>Notes:</p> The snippet above assumes your static site either serves the Markdown files or you convert them to HTML using a static site generator (MkDocs, Jekyll, etc.). If you'd like, I can produce fully inlined HTML pages for all docs so no client-side rendering is required.</p>
+
+          <hr>
+
+          <h2>Testing & QA suggestions</h2></h2>
+          <ul>
+            <li>Add</ul> unit tests for <code></code>data_to_canvas</code> / <code>canvas_to</code>_data</code> round-trip on linear and log scales.</li>
+            <li></li>Test <code></code>_sanitize_filename</code> against a variety of Unicode/spacing/punctuation inputs.</li>
+            <li>Validate</li> <code>safe_save_dialog</</code>code> fallback extension inference with patterns like <code>["</code>*.json"]</code> and <code>["</code>*.csv"]</code> (mock dialog creation in headless tests).</li>
+            <li>Manually test precision zoom</li> using a coarse image (checkerboard) and known calibration to ensure the overlay magnifies pixels as expected and that clicks place points precisely.</li>
+          </ul>
+
+          <h2></h2>If you'd like</h2>
+          <p>I can:</p>
+          <ul>
+            <li>Split</ul></li> this single file into multiple function-level markdown pages (one per function).</li>
+            <li></li>Produce fully inlined HTML pages (no client-side JS) for each Markdown file and update <code>docs</code>/index.html</code> to link them.</li>
+            <li>Provide unit-test</li> examples that exercise calibration and transform correctness.</li>
+          </ul>
+        </article>
+
+        <footer class="notes">
+          <p>Generated static docs</p> — Graph_Digitizer. Keep the source Markdown in <code>docs/</code></code> and regenerate these pages when the docs change.</p>
+        </footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

@@ -37,6 +37,17 @@ const APP_VERSION = "0.1.0"
 const MAX_DATASETS = 6
 const DEFAULT_COLORS = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#F0E442", "#56B4E9"]
 
+"""
+A container for a single dataset stored by the application.
+
+Fields:
+- `name::String` : user-visible name of the dataset.
+- `color::String` : color string (hex) associated with the dataset.
+- `color_rgb::RGB{Float64}` : parsed RGB color for drawing.
+- `points::Vector{Tuple{Float64,Float64}}` : list of (x, y) data points in data coordinates.
+
+This is a simple mutable struct used to keep per-dataset state.
+"""
 mutable struct Dataset
     name::String
     color::String
@@ -44,6 +55,15 @@ mutable struct Dataset
     points::Vector{Tuple{Float64,Float64}}
 end
 
+"""
+Global application state for the Graph Digitizer GUI.
+
+Holds references to important widgets, image surfaces, calibration parameters,
+datasets, and transient UI state (dragging, modal dialogs, etc).
+
+Fields are documented inline in the source; consumers typically use this object
+to read or modify application state when implementing callbacks or I/O.
+"""
 mutable struct AppState
     win::GtkWindow
     canvas::GtkCanvas
@@ -77,7 +97,20 @@ mutable struct AppState
     xlabel_entry::GtkEntry
     ylabel_entry::GtkEntry
     status_label::GtkLabel
-    magnifier_enabled::Bool
+
+    # Lightweight pointer tracking & zoom support for precise point placement.
+    # `last_mouse` stores the most recent canvas mouse position (x,y) which is
+    # used by the Alt+Z precision zoom feature.
+    last_mouse::Tuple{Float64,Float64}
+    # Toggle that enables the precision zoom overlay. When `true` a circular
+    # zoom overlay is drawn centered at `zoom_center`.
+    zoom_mode::Bool
+    # Center of the zoom overlay in canvas coordinates, or `nothing` when inactive.
+    zoom_center::Union{Nothing,Tuple{Float64,Float64}}
+    # Requested radius of the zoom circle in canvas pixels (computed from cm).
+    zoom_radius_px::Float64
+    # Magnification factor applied inside the zoom circle.
+    zoom_level::Float64
 
     # Modal flag to indicate a file chooser / modal dialog is active.
     modal_active::Bool
@@ -90,6 +123,19 @@ end
 # --------------------------
 # Utilities
 # --------------------------
+
+"""
+Convert a hex color string (e.g. "#RRGGBB" or "#RGB") to `RGB{Float64}`.
+
+Attempts to parse using Colorant parsing first; falls back to hexadecimal
+parsing if necessary. Returns black (`RGB(0,0,0)`) on parse failure.
+
+Arguments:
+- `hex::String` : a hex color string (with or without leading '#').
+
+Returns:
+- `RGB{Float64}` : parsed RGB color with components in [0,1].
+"""
 function hex_to_rgb(hex::String)::RGB{Float64}
     try
         c = parse(Colorant, hex)
@@ -109,6 +155,18 @@ function hex_to_rgb(hex::String)::RGB{Float64}
     end
 end
 
+"""
+Compute Euclidean distance between two `RGB{Float64}` colors.
+
+This helper is used for simple color matching and is inlined for performance.
+
+Arguments:
+- `a::RGB{Float64}` : first color.
+- `b::RGB{Float64}` : second color.
+
+Returns:
+- `Float64` : Euclidean distance in RGB space.
+"""
 @inline function color_distance_rgb(a::RGB{Float64}, b::RGB{Float64})
     dr = a.r - b.r
     dg = a.g - b.g
@@ -116,6 +174,18 @@ end
     return sqrt(dr * dr + dg * dg + db * db)
 end
 
+"""
+Safely parse the text in a `GtkEntry` to a `Float64`.
+
+Trims whitespace and returns `nothing` if the entry is empty or not a valid
+floating point number.
+
+Arguments:
+- `entry::GtkEntry` : widget holding the textual numeric input.
+
+Returns:
+- `Union{Float64,Nothing}` : parsed float or `nothing` if invalid.
+"""
 function safe_parse_float(entry::GtkEntry)
     txt = Gtk.get_gtk_property(entry, :text, String)
     txt = strip(txt)
@@ -126,6 +196,18 @@ function safe_parse_float(entry::GtkEntry)
     return v
 end
 
+"""
+Convert an image object to a Cairo surface suitable for drawing.
+
+This implementation writes the image to a temporary PNG file and uses Cairo to
+read that file into a surface. Returns `nothing` on failure.
+
+Arguments:
+- `img` : image object (typically returned by `load()`).
+
+Returns:
+- `Union{Nothing,Any}` : Cairo surface or `nothing` if conversion failed.
+"""
 function image_to_surface(img)::Union{Nothing,Any}
     tmp = tempname() * ".png"
     try
@@ -138,6 +220,19 @@ function image_to_surface(img)::Union{Nothing,Any}
     end
 end
 
+"""
+Compute a display scaling factor for the current image and canvas size.
+
+Given the `AppState` with image dimensions and the canvas widget, returns the
+scaling factor that fits the image inside the canvas while preserving aspect
+ratio. If image or canvas sizes are not available returns `1.0`.
+
+Arguments:
+- `state::AppState` : application state containing image and canvas.
+
+Returns:
+- `Float64` : recommended display scale.
+"""
 function compute_display_scale(state::AppState)
     if state.img_surface === nothing
         return 1.0
@@ -156,7 +251,12 @@ end
 # Filename helpers & README creation
 # --------------------------
 
-# Return the user's Downloads folder when available, otherwise fallback to tempdir()
+"""
+Return the user's Downloads folder when available, otherwise fallback to `tempdir()`.
+
+This is a small helper used by fallback save routines when a file chooser dialog is
+not available.
+"""
 function _preferred_downloads_dir()::String
     try
         d = joinpath(homedir(), "Downloads")
@@ -170,7 +270,18 @@ function _preferred_downloads_dir()::String
     end
 end
 
-# Sanitize a string to be a safe filename: remove/replace problematic characters.
+"""
+Sanitize a string into a filesystem-safe base filename.
+
+Removes or replaces characters that are likely to be problematic in filenames and
+collapses repeated underscores. Trims leading/trailing underscores or dots.
+
+Arguments:
+- `s::AbstractString` : input string (e.g. title).
+
+Returns:
+- `String` : sanitized filename (may be empty if input was empty).
+"""
 function _sanitize_filename(s::AbstractString)::String
     s = strip(String(s))
     if isempty(s)
@@ -185,7 +296,16 @@ function _sanitize_filename(s::AbstractString)::String
     return isempty(t) ? "" : t
 end
 
-# Create a sensible default filename using the Image Title (or timestamp fallback)
+"""
+Create a sensible default filename for saving using the title entry or a timestamp.
+
+Arguments:
+- `state::AppState` : application state (used to obtain title text).
+- `ext::AbstractString` : file extension (without leading dot).
+
+Returns:
+- `String` : path to a default filename in the preferred downloads directory.
+"""
 function default_filename_for_save(state::AppState, ext::AbstractString)::String
     title = try
         Gtk.get_gtk_property(state.title_entry, :text, String)
@@ -200,7 +320,19 @@ function default_filename_for_save(state::AppState, ext::AbstractString)::String
     return joinpath(dir, string(base, ".", ext))
 end
 
-# Ensure extension is present and return final filename
+"""
+Ensure the returned filename has the given extension.
+
+If the filename derived from `default_filename_for_save` lacks the extension,
+it will be appended.
+
+Arguments:
+- `state::AppState` : application state.
+- `ext::AbstractString` : desired extension (without dot).
+
+Returns:
+- `String` : filename with ensured extension.
+"""
 function default_filename_from_title(state::AppState, ext::AbstractString)::String
     fname = default_filename_for_save(state, ext)
     if !endswith(lowercase(fname), "." * lowercase(ext))
@@ -209,7 +341,12 @@ function default_filename_from_title(state::AppState, ext::AbstractString)::Stri
     return fname
 end
 
-# Ensure README.md exists in project root; write a helpful README if missing
+"""
+Ensure a README.md exists in the current working directory.
+
+If a README is missing, writes a basic help file describing the app and usage.
+This is best-effort and will ignore write errors.
+"""
 function ensure_readme()
     p = joinpath(pwd(), "README.md")
     if isfile(p)
@@ -252,7 +389,7 @@ function ensure_readme()
     4. Add points by left-clicking on the graph; right-click near a point to delete it.
     5. Use **Auto Trace Active Dataset** to extract points along a curve color-matched to the dataset color.
     6. Save your datasets as JSON or CSV using the toolbar, File menu, or keyboard shortcuts:
-       - Primary+S (Ctrl+S on Windows/Linux, Cmd+S on macOS) — Save JSON
+       - Primary+S (Ctrl+S on Windows and Linux) — Save JSON
        - Primary+Shift+S — Save CSV
 
     Notes:
@@ -283,6 +420,13 @@ end
 # --------------------------
 # Safe dialogs and focus helpers
 # --------------------------
+
+"""
+Robustly get the currently focused widget, returning `nothing` on error.
+
+This wraps `Gtk.get_focus` in a try/catch to avoid exceptions when called in
+various platform/widget states.
+"""
 function _get_focus_safe(win)
     try
         return Gtk.get_focus(win)
@@ -291,6 +435,22 @@ function _get_focus_safe(win)
     end
 end
 
+"""
+Show a safe file-open dialog and return the selected filename.
+
+This function attempts several Gtk APIs to create a file chooser. If all GUI
+attempts fail it returns an empty string. Sets `state.modal_active` while the
+dialog is shown to avoid re-entrancy.
+
+Arguments:
+- `state::AppState` : current application state (modal flag & status label).
+- `title::AbstractString` : dialog title.
+- `parent` : parent widget for the dialog (usually `state.win`).
+- `patterns::Vector{String}` : list of file filter patterns (e.g. ["*.png", "*.jpg"]).
+
+Returns:
+- `String` : selected filename or empty string if cancelled/unavailable.
+"""
 function safe_open_dialog(state::AppState, title::AbstractString, parent, patterns::Vector{String})
     state.modal_active = true
     dlg = nothing
@@ -391,6 +551,21 @@ function safe_open_dialog(state::AppState, title::AbstractString, parent, patter
     end
 end
 
+"""
+Show a safe file-save dialog and return the selected filename.
+
+If a native Save dialog cannot be created, this function will produce a
+sensible fallback path (Downloads or temp) and update the status label.
+
+Arguments:
+- `state::AppState` : application state used for modal flag and status.
+- `title::AbstractString` : dialog title.
+- `parent` : parent widget for the dialog.
+- `patterns::Vector{String}` : file filters to present (used to infer extension for fallback).
+
+Returns:
+- `String` : destination filename or empty string on cancel/error.
+"""
 function safe_save_dialog(state::AppState, title::AbstractString, parent, patterns::Vector{String})
     state.modal_active = true
     dlg = nothing
@@ -529,6 +704,19 @@ end
 # --------------------------
 # Top-level helpers for menu items and accelerators
 # --------------------------
+
+"""
+Construct a menu item widget with an accelerator label aligned on the right.
+
+Attempts to use `Gtk.AccelLabel` when available; falls back to a plain label.
+
+Arguments:
+- `label_text::AbstractString` : visible menu text.
+- `accel_text::AbstractString` : textual accelerator hint (e.g. "Ctrl+S").
+
+Returns:
+- `Gtk.MenuItem` : configured menu item widget.
+"""
 function menu_item_with_accel(label_text::AbstractString, accel_text::AbstractString="")
     mi = try
         Gtk.MenuItem()
@@ -572,6 +760,17 @@ function menu_item_with_accel(label_text::AbstractString, accel_text::AbstractSt
     return mi
 end
 
+"""
+Register an accelerator for a widget against an `AccelGroup` using a key string.
+
+Attempts several Gtk APIs to add the accelerator in a robust manner.
+
+Arguments:
+- `widget` : widget to attach accelerator to.
+- `ag` : accelerator group (may be `nothing`).
+- `keystr::AbstractString` : accelerator string (e.g. "<Ctrl>S" or "<Primary>S").
+- `signal::AbstractString` : signal name to trigger (defaults to "activate").
+"""
 function _add_accel(widget, ag, keystr::AbstractString, signal::AbstractString="activate")
     if ag === nothing
         return
@@ -601,38 +800,19 @@ end
 # --------------------------
 # Drawing / Auto-trace / Transforms
 # --------------------------
-function draw_magnifier(state::AppState, cr, x::Float64, y::Float64)
-    Cairo.save(cr)
-    mag_size = 140
-    zoom = 6.0
-    sx = state.display_scale
-    if sx == 0.0
-        Cairo.restore(cr)
-        return
-    end
-    hw = mag_size / (2 * zoom)
-    src_x = (x - state.offset_x) / sx - hw
-    src_y = (y - state.offset_y) / sx - hw
-    src_x = max(0.0, min(state.img_w - 2hw - 1, src_x))
-    src_y = max(0.0, min(state.img_h - 2hw - 1, src_y))
-    Cairo.set_source_rgb(cr, 1, 1, 1)
-    Cairo.rectangle(cr, x + 12, y + 12, mag_size + 4, mag_size + 4)
-    Cairo.fill(cr)
-    Cairo.save(cr)
-    Cairo.translate(cr, x + 14, y + 14)
-    Cairo.scale(cr, zoom * sx, zoom * sx)
-    if state.img_surface !== nothing
-        Cairo.set_source_surface(cr, state.img_surface, -src_x, -src_y)
-        Cairo.rectangle(cr, 0, 0, mag_size / (zoom * sx), mag_size / (zoom * sx))
-        Cairo.paint(cr)
-    end
-    Cairo.restore(cr)
-    Cairo.set_source_rgb(cr, 0, 0, 0)
-    Cairo.rectangle(cr, x + 12, y + 12, mag_size + 4, mag_size + 4)
-    Cairo.stroke(cr)
-    Cairo.restore(cr)
-end
 
+"""
+Parse a color string and return an (r,g,b) tuple of Float64 components.
+
+This is a tiny adapter used by drawing code that expects a 3-tuple instead of
+an `RGB` object.
+
+Arguments:
+- `colname::String` : color string (e.g. hex).
+
+Returns:
+- `(Float64,Float64,Float64)` : RGB components in [0,1].
+"""
 function parse_color(colname::String)
     try
         rgb = hex_to_rgb(colname)
@@ -642,6 +822,20 @@ function parse_color(colname::String)
     end
 end
 
+"""
+Transform a data-space point (dx, dy) into canvas pixel coordinates.
+
+Uses the calibration pixel positions stored in `state.px_xmin`, `state.px_xmax`,
+`state.px_ymin`, and `state.px_ymax` as well as numeric ranges and log flags.
+
+Arguments:
+- `state::AppState` : application state including calibration.
+- `dx::Float64` : data x-value.
+- `dy::Float64` : data y-value.
+
+Returns:
+- `(Float64,Float64)` : canvas coordinates (px, py). Returns (0,0) if not calibrated.
+"""
 function data_to_canvas(state::AppState, dx::Float64, dy::Float64)
     if state.px_xmin === nothing || state.px_xmax === nothing || state.px_ymin === nothing || state.px_ymax === nothing
         return (0.0, 0.0)
@@ -674,6 +868,19 @@ function data_to_canvas(state::AppState, dx::Float64, dy::Float64)
     return px, py
 end
 
+"""
+Transform canvas coordinates to data-space (inverse of `data_to_canvas`).
+
+Uses calibration pixel positions and numeric ranges; respects logarithmic axes.
+
+Arguments:
+- `state::AppState` : application state including calibration.
+- `cx::Float64` : canvas x coordinate.
+- `cy::Float64` : canvas y coordinate.
+
+Returns:
+- `(Float64,Float64)` : (x, y) in data coordinates. Returns (0,0) if not calibrated.
+"""
 function canvas_to_data(state::AppState, cx::Float64, cy::Float64)
     if state.px_xmin === nothing || state.px_xmax === nothing || state.px_ymin === nothing || state.px_ymax === nothing
         return (0.0, 0.0)
@@ -707,6 +914,27 @@ function canvas_to_data(state::AppState, cx::Float64, cy::Float64)
     return val, valy
 end
 
+"""
+Perform an auto-trace scan across the calibrated X range attempting to find
+the best color match per column for `target_rgb`.
+
+This scans along pixel columns between the calibrated X pixel positions and
+for each column finds the pixel row with minimal color distance to the target.
+The found canvas coordinates are converted to data coordinates and returned.
+
+Arguments:
+- `state::AppState` : application state with image and calibration.
+- `target_rgb::RGB{Float64}` : RGB color to match (components in [0,1]).
+
+Returns:
+- `Vector{Tuple{Float64,Float64}}` : sampled data points (x,y).
+
+Example:
+- To auto-trace the currently active dataset's color:
+    ds = state.datasets[state.active_dataset]
+    sampled = auto_trace_scan(state, hex_to_rgb(ds.color))
+    # `sampled` will contain a Vector{Tuple{Float64,Float64}} of data-space points
+"""
 function auto_trace_scan(state::AppState, target_rgb::RGB{Float64})
     if state.px_xmin === nothing || state.px_xmax === nothing || state.px_ymin === nothing || state.px_ymax === nothing
         return Tuple{Float64,Float64}[]
@@ -755,6 +983,13 @@ function auto_trace_scan(state::AppState, target_rgb::RGB{Float64})
     return sampled
 end
 
+"""
+Draw the main canvas including image, calibration markers, calibration click overlays,
+and dataset points.
+
+Intended to be called from a canvas draw callback. The function expects the
+Cairo context `cr` and the `AppState` describing current application state.
+"""
 function draw_canvas(state::AppState, cr)
     Cairo.set_source_rgb(cr, 1, 1, 1)
     Cairo.paint(cr)
@@ -821,6 +1056,81 @@ function draw_canvas(state::AppState, cr)
             end
         end
     end
+
+    # Precision zoom overlay: when `zoom_mode` is enabled draw a circular
+    # magnified view centered at `zoom_center`. The overlay renders a scaled
+    # region of the underlying image surface inside a filled circle so the
+    # user can place points with greater pixel-level accuracy.
+    if state.zoom_mode && state.zoom_center !== nothing
+        zx, zy = state.zoom_center
+        Cairo.save(cr)
+        # background circle for contrast
+        Cairo.set_source_rgb(cr, 1.0, 1.0, 1.0)
+        Cairo.arc(cr, zx, zy, state.zoom_radius_px, 0, 2pi)
+        Cairo.fill(cr)
+
+        sx = state.display_scale
+        if state.img_surface !== nothing && sx > 0
+            try
+                # map canvas center to image pixel coordinates
+                img_cx = (zx - state.offset_x) / sx
+                img_cy = (zy - state.offset_y) / sx
+                # compute source half-width in image pixels (account for zoom level)
+                rpx = max(1.0, state.zoom_radius_px / (sx * state.zoom_level))
+                src_x = clamp(img_cx - rpx, 0.0, max(0.0, state.img_w - 1.0))
+                src_y = clamp(img_cy - rpx, 0.0, max(0.0, state.img_h - 1.0))
+
+                # Destination square (in device pixels) where we'll paint the scaled region.
+                dst_size = 2 * state.zoom_radius_px
+
+                # Draw the scaled image region into the destination square.
+                Cairo.save(cr)
+                Cairo.translate(cr, zx - state.zoom_radius_px, zy - state.zoom_radius_px)
+                # Note: scale by (zoom_level * display_scale) to convert image pixels
+                # into canvas device pixels with magnification. We wrap in try/catch
+                # to remain robust across Cairo versions.
+                Cairo.scale(cr, state.zoom_level * sx, state.zoom_level * sx)
+                Cairo.set_source_surface(cr, state.img_surface, -src_x, -src_y)
+                Cairo.rectangle(cr, 0, 0, dst_size / (state.zoom_level * sx), dst_size / (state.zoom_level * sx))
+                try
+                    Cairo.paint(cr)
+                catch
+                    # best-effort: if paint/filter not available, continue
+                end
+                Cairo.restore(cr)
+
+                # Optionally draw a subtle grid to make pixel boundaries clearer (best-effort).
+                try
+                    # compute an approximate pixel grid step in canvas space and draw if reasonable
+                    step = max(1.0, 1.0 * state.zoom_level)
+                    Cairo.set_source_rgba(cr, 0.0, 0.0, 0.0, 0.15)
+                    i = -state.zoom_radius_px
+                    while i <= state.zoom_radius_px
+                        Cairo.move_to(cr, zx + i, zy - state.zoom_radius_px)
+                        Cairo.line_to(cr, zx + i, zy + state.zoom_radius_px)
+                        i += step
+                    end
+                    i = -state.zoom_radius_px
+                    while i <= state.zoom_radius_px
+                        Cairo.move_to(cr, zx - state.zoom_radius_px, zy + i)
+                        Cairo.line_to(cr, zx + state.zoom_radius_px, zy + i)
+                        i += step
+                    end
+                    Cairo.stroke(cr)
+                catch
+                    # ignore grid-draw errors
+                end
+            catch
+                # ignore any errors while computing zoom region
+            end
+        end
+
+        # draw circle outline
+        Cairo.set_source_rgb(cr, 0.0, 0.0, 0.0)
+        Cairo.arc(cr, zx, zy, state.zoom_radius_px, 0, 2pi)
+        Cairo.stroke(cr)
+        Cairo.restore(cr)
+    end
 end
 
 # --------------------------
@@ -848,6 +1158,13 @@ end
 # --------------------------
 # I/O helpers
 # --------------------------
+
+"""
+Set the text of a `GtkLabel` in a safe best-effort manner.
+
+Wraps `Gtk.set_gtk_property!` and ignores errors that might occur on some
+platforms or with certain widget implementations.
+"""
 function set_label(lbl::GtkLabel, txt::AbstractString)
     try
         Gtk.set_gtk_property!(lbl, :label, txt)
@@ -856,6 +1173,16 @@ function set_label(lbl::GtkLabel, txt::AbstractString)
     end
 end
 
+"""
+Export all datasets to a CSV file.
+
+CSV contains three columns: `dataset`, `x`, `y`. Uses `CSV.write` and will
+throw on IO errors.
+
+Arguments:
+- `state::AppState` : application state containing datasets.
+- `fname::String` : destination filename (should end in .csv).
+"""
 function export_csv(state::AppState, fname::String)
     rows = DataFrame(dataset=String[], x=Float64[], y=Float64[])
     for ds in state.datasets
@@ -866,6 +1193,16 @@ function export_csv(state::AppState, fname::String)
     CSV.write(fname, rows)
 end
 
+"""
+Export the full application data to a JSON file.
+
+JSON contains title, axis labels, numeric ranges, log flags, and each dataset
+(including color and points). Uses `JSON.print` to write the file.
+
+Arguments:
+- `state::AppState` : application state to serialize.
+- `fname::String` : destination filename (should end in .json).
+"""
 function export_json(state::AppState, fname::String)
     out = Dict{String,Any}()
     try
@@ -901,6 +1238,21 @@ end
 # --------------------------
 # Exit / confirmation helpers
 # --------------------------
+
+"""
+Prompt the user to save before exiting.
+
+Shows a dialog asking whether to `Save`, `Discard`, or `Cancel`. If dialogs
+cannot be created a fallback save using `safe_save_dialog` is attempted.
+Returns true if it is OK to exit (either saved or discard chosen), false if
+the user cancelled.
+
+Arguments:
+- `state::AppState` : application state (used to present dialogs and access state).
+
+Returns:
+- `Bool` : `true` if the application may exit, `false` to abort closing.
+"""
 function confirm_exit_and_maybe_save(state::AppState)::Bool
     dlg = try
         Gtk.Dialog("Save current datasets before exiting?", state.win)
@@ -1030,10 +1382,12 @@ function confirm_exit_and_maybe_save(state::AppState)::Bool
     end
 end
 
-# Force-quit helper: ensure the application exits even when dialogs/modal state
-# prevents normal Gtk.main_quit from working. This tries several shutdown paths
-# but always attempts to terminate the main loop and destroy the window so that
-# Exit / Ctrl+Q reliably closes the app.
+"""
+Forcefully quit the application by attempting several shutdown paths.
+
+This helper clears the modal flag, attempts to call `Gtk.main_quit`, destroys
+the main window widget, and falls back to other available destruction APIs.
+"""
 function force_quit(state::AppState)
     # Clear modal flag so helpers don't block
     try
@@ -1069,6 +1423,18 @@ end
 # --------------------------
 # Main App creation
 # --------------------------
+
+"""
+Construct and initialize the full Graph Digitizer application UI.
+
+This function creates the main window, widgets, signals, and returns the
+`AppState` object which can be used by the caller for further manipulation
+or testing. The returned state is fully wired with callback handlers for
+loading images, calibration, point editing, auto-trace, saving, and exit.
+
+Returns:
+- `AppState` : initialized application state (window is created but not shown).
+"""
 function create_app()
     win = GtkWindow("Graph Digitizer – Julia", 1100, 820)
     mainbox = GtkBox(:v)
@@ -1478,15 +1844,36 @@ function create_app()
 
     # helper functions
     function _style_label(lbl)
-        try; Gtk.set_gtk_property!(lbl, :halign, GtkAlign.START); catch; end
-        try; Gtk.set_gtk_property!(lbl, :valign, GtkAlign.CENTER); catch; end
-        try; Gtk.set_gtk_property!(lbl, :margin_end, 6); catch; end
-        try; Gtk.set_gtk_property!(lbl, :width_request, label_width); catch; end
+        try
+            Gtk.set_gtk_property!(lbl, :halign, GtkAlign.START)
+        catch
+        end
+        try
+            Gtk.set_gtk_property!(lbl, :valign, GtkAlign.CENTER)
+        catch
+        end
+        try
+            Gtk.set_gtk_property!(lbl, :margin_end, 6)
+        catch
+        end
+        try
+            Gtk.set_gtk_property!(lbl, :width_request, label_width)
+        catch
+        end
     end
     function _style_entry(ent)
-        try; Gtk.set_gtk_property!(ent, :hexpand, true); catch; end
-        try; Gtk.set_gtk_property!(ent, :halign, GtkAlign.FILL); catch; end
-        try; Gtk.set_gtk_property!(ent, :valign, GtkAlign.CENTER); catch; end
+        try
+            Gtk.set_gtk_property!(ent, :hexpand, true)
+        catch
+        end
+        try
+            Gtk.set_gtk_property!(ent, :halign, GtkAlign.FILL)
+        catch
+        end
+        try
+            Gtk.set_gtk_property!(ent, :valign, GtkAlign.CENTER)
+        catch
+        end
         try
             Gtk.set_gtk_property!(ent, :margin_top, 2)
             Gtk.set_gtk_property!(ent, :margin_bottom, 2)
@@ -1497,31 +1884,38 @@ function create_app()
     # create widgets
     title_label = GtkLabel("Title:")
     title_entry = GtkEntry()
-    _style_label(title_label); _style_entry(title_entry)
+    _style_label(title_label)
+    _style_entry(title_entry)
 
     xlabel_label = GtkLabel("X label:")
     xlabel_entry = GtkEntry()
-    _style_label(xlabel_label); _style_entry(xlabel_entry)
+    _style_label(xlabel_label)
+    _style_entry(xlabel_entry)
 
     ylabel_label = GtkLabel("Y label:")
     ylabel_entry = GtkEntry()
-    _style_label(ylabel_label); _style_entry(ylabel_entry)
+    _style_label(ylabel_label)
+    _style_entry(ylabel_entry)
 
     lxmin = GtkLabel("X min:")
     x_min_entry = GtkEntry()
-    _style_label(lxmin); _style_entry(x_min_entry)
+    _style_label(lxmin)
+    _style_entry(x_min_entry)
 
     lxmax = GtkLabel("X max:")
     x_max_entry = GtkEntry()
-    _style_label(lxmax); _style_entry(x_max_entry)
+    _style_label(lxmax)
+    _style_entry(x_max_entry)
 
     lymin = GtkLabel("Y min:")
     y_min_entry = GtkEntry()
-    _style_label(lymin); _style_entry(y_min_entry)
+    _style_label(lymin)
+    _style_entry(y_min_entry)
 
     lymax = GtkLabel("Y max:")
     y_max_entry = GtkEntry()
-    _style_label(lymax); _style_entry(y_max_entry)
+    _style_label(lymax)
+    _style_entry(y_max_entry)
 
     # place rows (labels in column 1, entries in column 2)
     form_grid[1, 1] = title_label
@@ -1601,11 +1995,13 @@ function create_app()
     delete_btn = GtkButton("Delete Selected Point")
     push!(ds_box, delete_btn)
 
-    magnifier_toggle = GtkCheckButton("Magnifier")
-    Gtk.set_gtk_property!(magnifier_toggle, :active, true)
-    push!(ds_box, magnifier_toggle)
-
     canvas = GtkCanvas()
+    # Ensure the canvas can receive keyboard focus so keyboard shortcuts (Alt+Z) work.
+    try
+        Gtk.set_gtk_property!(canvas, :can_focus, true)
+    catch
+        # best-effort fallback: some Gtk versions may not accept :can_focus property
+    end
     Gtk.set_gtk_property!(canvas, :width_request, 1000)
     Gtk.set_gtk_property!(canvas, :height_request, 520)
     push!(mainbox, canvas)
@@ -1618,7 +2014,14 @@ function create_app()
     push!(mainbox, status_label)
 
     state = AppState(win, canvas, nothing, nothing, 0, 0, 1.0, 0.0, 0.0, nothing, nothing, nothing, nothing,
-        0.0, 1.0, 0.0, 1.0, false, false, Dataset[], 1, false, nothing, title_entry, xlabel_entry, ylabel_entry, status_label, true, false,
+        0.0, 1.0, 0.0, 1.0, false, false, Dataset[], 1, false, nothing, title_entry, xlabel_entry, ylabel_entry, status_label,
+        # initialize pointer/zoom helper fields
+        (0.0, 0.0),    # last_mouse
+        false,         # zoom_mode
+        nothing,       # zoom_center
+        38.0,          # zoom_radius_px (approx 1 cm at ~96 DPI)
+        6.0,           # zoom_level
+        false,         # modal_active
         false, Tuple{Float64,Float64}[])
 
     for i in 1:MAX_DATASETS
@@ -1723,11 +2126,6 @@ function create_app()
         end
     end
 
-    Gtk.signal_connect(magnifier_toggle, "toggled") do widget
-        state.magnifier_enabled = Gtk.get_gtk_property(widget, :active, Bool)
-        draw(canvas)
-    end
-
     Gtk.signal_connect(auto_trace_btn, "clicked") do _
         if state.image === nothing
             set_label(state.status_label, "Load an image first")
@@ -1751,6 +2149,22 @@ function create_app()
     end
 
     Gtk.signal_connect(canvas, "button-press-event") do widget, event
+        # Grab focus on mouse click so the canvas receives key events (Alt+Z toggling).
+        try
+            # Prefer setting can_focus at widget creation; ensure here too (best-effort).
+            Gtk.set_gtk_property!(widget, :can_focus, true)
+        catch
+        end
+        try
+            Gtk.grab_focus(widget)
+        catch
+            try
+                # Fallbacks for different Gtk.jl versions
+                Gtk.Widget.grab_focus(widget)
+            catch
+            end
+        end
+
         if state.calibration_mode
             px = event.x
             py = event.y
@@ -1773,8 +2187,16 @@ function create_app()
         if state.image === nothing
             return false
         end
-        x = event.x
-        y = event.y
+
+        # If zoom mode is active, use the zoom center for point placement and hit-testing;
+        # otherwise use the raw event coordinates.
+        if state.zoom_mode && state.zoom_center !== nothing
+            x, y = state.zoom_center
+        else
+            x = event.x
+            y = event.y
+        end
+
         found = find_nearest_point(state, x, y, 8.0)
         if event.button == 1
             if found !== nothing
@@ -1801,6 +2223,23 @@ function create_app()
     end
 
     Gtk.signal_connect(canvas, "motion-notify-event") do widget, event
+        # track the most recent mouse position for precision zoom activation
+        try
+            state.last_mouse = (event.x, event.y)
+        catch
+        end
+
+        # If precision zoom is active, move the zoom overlay to follow the cursor
+        try
+            if state.zoom_mode && state.zoom_center !== nothing
+                # keep the zoom overlay centered on the most recent pointer
+                state.zoom_center = state.last_mouse
+                # redraw to reflect the overlay movement
+                draw(canvas)
+            end
+        catch
+        end
+
         if state.dragging && state.drag_idx !== nothing
             di, pi = state.drag_idx
             dx, dy = canvas_to_data(state, event.x, event.y)
@@ -1822,6 +2261,74 @@ function create_app()
     end
 
     # Key handling: Delete/Backspace handled above; add accelerators for Save/Exit
+
+    # Canvas-level key handling for precision zoom (Alt+Z toggles zoom-mode when the canvas has focus).
+    Gtk.signal_connect(canvas, "key-press-event") do widget, event
+        # detect Alt modifier robustly
+        alt = false
+        try
+            st = event.state
+            alt_mask = 0
+            try
+                alt_mask = Gdk.ModifierType.MOD1_MASK
+            catch
+                try
+                    alt_mask = Gtk.gdk.MOD1_MASK
+                catch
+                    alt_mask = 0x8
+                end
+            end
+            if alt_mask != 0
+                alt = (Int(st) & Int(alt_mask)) != 0
+            else
+                alt = (Int(st) & 0x8) != 0
+            end
+        catch
+            alt = false
+        end
+
+        key = event.keyval
+        ch = '\0'
+        try
+            ch = uppercase(Char(key))
+        catch
+            ch = '\0'
+        end
+
+        if alt && ch == 'Z'
+            # Toggle precision zoom centered at the last known mouse position.
+            state.zoom_mode = !state.zoom_mode
+            if state.zoom_mode
+                state.zoom_center = state.last_mouse
+                # Attempt to query screen DPI; fallback to 96 dpi.
+                dpi = 96.0
+                try
+                    scr = Gdk.Screen.get_default()
+                    dpi_try = try
+                        Gdk.Screen.get_resolution(scr)
+                    catch
+                        0.0
+                    end
+                    if dpi_try > 0
+                        dpi = dpi_try
+                    end
+                catch
+                end
+                px_per_cm = dpi / 2.54
+                state.zoom_radius_px = px_per_cm * 1.0
+                # default magnification for precision placement
+                state.zoom_level = 6.0
+                set_label(state.status_label, "Zoom precision enabled")
+            else
+                state.zoom_center = nothing
+                set_label(state.status_label, "Zoom precision disabled")
+            end
+            draw(canvas)
+            return true
+        end
+
+        return false
+    end
     Gtk.signal_connect(win, "key-press-event") do widget, event
         # event.keyval is an integer; try to robustly derive a character and modifier state
         key = event.keyval
@@ -1976,35 +2483,47 @@ function create_app()
 
     try
         if save_json_btn !== nothing
-            Gtk.signal_connect(save_json_btn, "clicked") do w; handler_save_json(); end
+            Gtk.signal_connect(save_json_btn, "clicked") do w
+                handler_save_json()
+            end
         end
     catch
     end
     try
         if save_csv_btn !== nothing
-            Gtk.signal_connect(save_csv_btn, "clicked") do w; handler_save_csv(); end
+            Gtk.signal_connect(save_csv_btn, "clicked") do w
+                handler_save_csv()
+            end
         end
     catch
     end
     try
         if save_json_mi !== nothing
-            Gtk.signal_connect(save_json_mi, "activate") do w; handler_save_json(); end
+            Gtk.signal_connect(save_json_mi, "activate") do w
+                handler_save_json()
+            end
         end
     catch
     end
     try
         if save_csv_mi !== nothing
-            Gtk.signal_connect(save_csv_mi, "activate") do w; handler_save_csv(); end
+            Gtk.signal_connect(save_csv_mi, "activate") do w
+                handler_save_csv()
+            end
         end
     catch
     end
     try
-        Gtk.signal_connect(exit_btn, "clicked") do _; handler_exit(); end
+        Gtk.signal_connect(exit_btn, "clicked") do _
+            handler_exit()
+        end
     catch
     end
     try
         if exit_mi !== nothing
-            Gtk.signal_connect(exit_mi, "activate") do _; handler_exit(); end
+            Gtk.signal_connect(exit_mi, "activate") do _
+                handler_exit()
+            end
         end
     catch
     end
@@ -2032,32 +2551,89 @@ end
 # --------------------------
 # Run the app when executed directly
 # --------------------------
-try
-    ensure_readme()
-catch
-end
+if abspath(PROGRAM_FILE) == @__FILE__
+    global app_state = nothing
+    # Basic startup diagnostics to help when the app does not open and no terminal output is visible.
+    # These prints are intentionally lightweight and will always go to stdout/stderr.
+    try
+        println("GraphDigitizer: starting up")
+        println("Julia version: ", VERSION)
+        println("Current working directory: ", pwd())
+        ensure_readme()
+    catch e
+        @warn "ensure_readme() failed" exception = (e, catch_backtrace())
+    end
 
-# Create and show the app
-try
-    app_state = create_app()
+    # Create the UI and enter the GTK main loop with stronger diagnostics and error logging.
     try
-        Gtk.showall(app_state.win)
-    catch
-        try
-            Gtk.show(app_state.win)
-        catch
-        end
+        println("GraphDigitizer: creating application UI...")
+        global app_state = create_app()
+    catch e
+        bt = catch_backtrace()
+        @error "Failed to create application UI" exception = (e, bt)
+        println("ERROR: Failed to create application UI: ", e)
+        rethrow(e)
     end
+
+    # Show the main window (attempt both showall and show) and enter the main loop.
     try
-        Gtk.main()
-    catch
-        # some Gtk versions may use gtk_main
+        println("GraphDigitizer: showing window...")
         try
-            Gtk.gtk_main()
-        catch
+            Gtk.showall(app_state.win)
+        catch inner
+            @warn "Gtk.showall failed, attempting Gtk.show" error = inner
+            try
+                Gtk.show(app_state.win)
+            catch inner2
+                @error "Gtk.show also failed" error = inner2
+                println("ERROR: Unable to show window. See logs for details.")
+                rethrow(inner2)
+            end
         end
+
+        println("GraphDigitizer: entering GTK main loop...")
+
+        # Robustly choose an available GTK main-loop entry point.
+        # Prefer `main`, then `gtk_main`, then `start`. Only call the first one
+        # that is present and succeeds.
+        did_run = false
+
+        if isdefined(Gtk, :main) && !did_run
+            try
+                Gtk.main()
+                did_run = true
+            catch e
+                @warn "Gtk.main raised an exception; will try fallbacks" exception = (e, catch_backtrace())
+            end
+        end
+
+        if isdefined(Gtk, :gtk_main) && !did_run
+            try
+                Gtk.gtk_main()
+                did_run = true
+            catch e2
+                @warn "Gtk.gtk_main raised an exception; will try Gtk.start()" exception = (e2, catch_backtrace())
+            end
+        end
+
+        if isdefined(Gtk, :start) && !did_run
+            try
+                Gtk.start()
+                did_run = true
+            catch e3
+                @error "Gtk.start raised an exception; GTK main loop failed" exception = (e3, catch_backtrace())
+                println("ERROR: GTK main loop failed: ", e3)
+                rethrow(e3)
+            end
+        end
+
+        if !did_run
+            @error "No known GTK main-loop entry point found (Gtk.main, Gtk.gtk_main, Gtk.start)"
+            error("No GTK main loop entry point available")
+        end
+    catch e
+        @error "Failed while showing window or running GTK main loop" exception = (e, catch_backtrace())
+        println("ERROR: Failed to start GraphDigitizer: ", e)
+        rethrow(e)
     end
-catch e
-    @error "Failed to start GraphDigitizer: $e"
-    rethrow(e)
 end

@@ -27,6 +27,6 @@ Manifest*.toml
 LocalPreferences.toml
 JuliaLocalPreferences.toml
 
-# Files unique to the present user
+# Development Files
 *.bak
-data_exports/
+*.log

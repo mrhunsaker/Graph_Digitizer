@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="</head>utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Graph Digitizer — Types Reference</title></title>
+  <meta name="description" content="Types reference for Graph Digitizer — rendered from docs/types.md" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.8.0/styles/github-dark.min.css">
+  <style>
+    :</style>root{
+      --bg:#f6f8fb;
+      --card:#ffffff;
+      --muted:#6b7280;
+      --accent:#0b66c2;
+      --border:#e6e9ef;
+      --radius:10px;
+      --content-max:980px;
+      --mono: Menlo, Monaco, "Courier New", monospace;
+    }
+    html,body{height:100%; margin:0; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:var(--bg); color:#0f1724;}
+    .container { display:flex; gap:24px; padding:24px; box-sizing:border-box; }
+    nav { width:260px; flex:0 0 260px; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:16px; box-shadow:0 6px 20px rgba(15,23,42,0.04); height:fit-content; }
+    nav h2 { margin:0 0 8px 0; color:var(--accent); font-size:16px; }
+    nav a { display:block; color:#0b66c2; text-decoration:none; padding:6px 0; border-radius:6px; }
+    nav a:hover { background:rgba(11,102,194,0.06); }
+    main { flex:1 1 auto; max-width:var(--content-max); }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:22px; box-shadow:0 10px 30px rgba(15,23,42,0.04); }
+    header.page-title h1 { margin:0; font-size:22px; }
+    header.page-title p { margin:8px 0 0 0; color:var(--muted); font-size:14px; }
+    .md-body { margin-top:18px; line-height:1.65; color:#0f1724; }
+    .md-body h1, .md-body h2, .md-body h3 { color:#0f1724; }
+    .md-body pre { background:#0f1724; color:#e6eef8; padding:12px; border-radius:8px; overflow:auto; font-family:var(--mono); }
+    .md-body code { background:#f3f4f6; padding:0.15em 0.35em; border-radius:6px; font-family:var(--mono); font-size:0.95em; }
+    .md-body table { border-collapse:collapse; width:100%; margin:12px 0; }
+    .md-body table th, .md-body table td { border:1px solid #ecedf2; padding:8px 10px; text-align:left; }
+    .status { margin-top:12px; color:var(--muted); font-size:13px; }
+    footer.notes { margin-top:18px; color:var(--muted); font-size:13px; }
+    @media (max-width:900px) {
+      .container { flex-direction:column; padding:16px; }
+      nav { width:100%; order:2; }
+      main { order:1; }
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.8.0/lib/common/index.min.js"></script>
+</head>
+<body></body>
+  <div class="container" role="main">
+    <nav aria-label="Documentation navigation">
+      <h2>GraphDigitizer</h2> — Docs</h2>
+      <a href="index.html">Docs Home</a>
+      <a href="api_reference.html">API Reference</a>
+      <a href="functions_data_transforms.html">Data Transforms</a>
+      <a href="types.html" aria-current="page">Types Reference</a>
+      <a href="utilities.html">Utilities</a>
+      <hr style="border:none; border-top:1px dashed var(--border); margin:12px 0;">
+      <div class="status">This HTML page renders <code>docs/types</code>.md</code> client-side. If content is blank due to browser restrictions, open the markdown directly or serve the docs directory over HTTP.</div>
+    </nav>
+
+    <main></main>
+      <div class="card">
+        <header class="page-title">
+          <h1>Types Reference</</h1>h1>
+          <p class="muted">Rendered from <code></code>docs/types.md</code>. Shows the primary types used by GraphDigitizer.</p>
+        </header>
+
+        <article id="content" class="md-body">
+          <p class="status">Loading documentation…</p>
+        </article>
+
+        <footer class="notes">
+          <p>Tip:</p> for production hosting, pre-render these Markdown files to HTML during your build step for better performance and SEO. This client-side rendering is convenient for quick local browsing without a build step.</p>
+        </footer>
+      </div>
+    </main>
+  </div>
+
+  <script></script>
+    // Configure marked and highlight.js
+    marked.setOptions({
+      gfm: true,
+      breaks: false,
+      smartLists: true,
+      smartypants: false,
+      highlight: function(code, lang) {
+        try {
+          if (lang && hljs.getLanguage(lang)) {
+            return hljs.highlight(code, { language: lang }).value;
+          } else {
+            return hljs.highlightAuto(code).value;
+          }
+        } catch (e) {
+          return code;
+        }
+      }
+    });
+
+    (function () {
+      const mdPath = "../types.md"; // markdown file relative to this HTML file
+      const container = document.getElementById("content");
+      container.innerHTML = "<p class='status'>Fetching types.md…</p>";
+
+      async function load() {
+        try {
+          const resp = await fetch(mdPath, { cache: "no-cache" });
+          if (!resp.ok) {
+            container.innerHTML = "<p class='status'>Failed to fetch documentation: " + resp.status + " " + resp.statusText + "</p>" +
+                                  "<p class='status'>If you are viewing files locally (file://), your browser may block fetch requests. Serve the docs directory via HTTP (e.g. `python -m http.server`) or open the Markdown file directly.</p>";
+            return;
+          }
+          const md = await resp.text();
+          container.innerHTML = marked.parse(md);
+
+          // Highlight code blocks
+          document.querySelectorAll("pre code").forEach((block) => {
+            try { hljs.highlightElement(block); } catch (e) { /* ignore */ }
+          });
+
+          // Build small TOC from headings
+          buildTOC();
+        } catch (err) {
+          container.innerHTML = "<p class='status'>Error loading documentation: " + String(err) + "</p>";
+        }
+      }
+
+      function buildTOC() {
+        const headings = container.querySelectorAll("h2, h3");
+        if (!headings || headings.length === 0) return;
+        const toc = document.createElement("nav");
+        toc.setAttribute("aria-label", "Page table of contents");
+        toc.style.margin = "12px 0 18px 0";
+        const ul = document.createElement("ul");
+        ul.style.listStyle = "none";
+        ul.style.padding = "0";
+        ul.style.margin = "0";
+        headings.forEach(h => {
+          if (!h.id) {
+            h.id = h.textContent.trim().toLowerCase().replace(/[^\w]+/g, "-").replace(/^[-]+|[-]+$/g, "");
+          }
+          const li = document.createElement("li");
+          li.style.margin = "6px 0";
+          const a = document.createElement("a");
+          a.href = "#" + h.id;
+          a.textContent = h.textContent;
+          a.style.color = "#0b66c2";
+          a.style.textDecoration = "none";
+          if (h.tagName.toLowerCase() === "h3") {
+            a.style.marginLeft = "12px";
+            a.style.fontSize = "0.95em";
+          }
+          li.appendChild(a);
+          ul.appendChild(li);
+        });
+        toc.appendChild(ul);
+        // insert TOC at top of content
+        const first = container.querySelector("h1");
+        if (first && first.parentElement) {
+          first.parentElement.insertBefore(toc, first.nextSibling);
+        } else {
+          container.insertBefore(toc, container.firstChild);
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", load);
+    })();
+  </script>
+</body>
+</html>
