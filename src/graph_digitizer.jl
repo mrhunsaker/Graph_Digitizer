@@ -99,25 +99,23 @@ mutable struct AppState
     status_label::GtkLabel
 
     # Lightweight pointer tracking & zoom support for precise point placement.
-    # `last_mouse` stores the most recent canvas mouse position (x,y) which is
-    # used by the Alt+Z precision zoom feature.
     last_mouse::Tuple{Float64,Float64}
-    # Toggle that enables the precision zoom overlay. When `true` a circular
-    # zoom overlay is drawn centered at `zoom_center`.
     zoom_mode::Bool
-    # Center of the zoom overlay in canvas coordinates, or `nothing` when inactive.
     zoom_center::Union{Nothing,Tuple{Float64,Float64}}
-    # Requested radius of the zoom circle in canvas pixels (computed from cm).
     zoom_radius_px::Float64
-    # Magnification factor applied inside the zoom circle.
     zoom_level::Float64
 
-    # Modal flag to indicate a file chooser / modal dialog is active.
     modal_active::Bool
 
-    # Non-blocking calibration fields
     calibration_mode::Bool
     calib_clicks::Vector{Tuple{Float64,Float64}}
+    previous_display_scale::Float64
+    previous_offset_x::Float64
+    previous_offset_y::Float64
+
+    # New: user-provided X snap list and toggle to show the vertical guide lines
+    x_snap_values::Vector{Float64}
+    show_snap_lines::Bool
 end
 
 # --------------------------
@@ -127,31 +125,27 @@ end
 """
 Convert a hex color string (e.g. "#RRGGBB" or "#RGB") to `RGB{Float64}`.
 
-Attempts to parse using Colorant parsing first; falls back to hexadecimal
-parsing if necessary. Returns black (`RGB(0,0,0)`) on parse failure.
-
-Arguments:
-- `hex::String` : a hex color string (with or without leading '#').
-
-Returns:
-- `RGB{Float64}` : parsed RGB color with components in [0,1].
+Attempts to parse common forms and returns black (`RGB(0,0,0)`) on parse failure.
 """
 function hex_to_rgb(hex::String)::RGB{Float64}
+    s = strip(hex)
+    if startswith(s, "#")
+        s = s[2:end]
+    end
+    if length(s) == 3
+        # expand shorthand e.g. "0f4" -> "00ff44"
+        s = string(s[1], s[1], s[2], s[2], s[3], s[3])
+    end
+    if length(s) != 6
+        return RGB(0.0, 0.0, 0.0)
+    end
     try
-        c = parse(Colorant, hex)
-        return RGB{Float64}(c)
+        r = parse(Int, s[1:2]; base=16) / 255.0
+        g = parse(Int, s[3:4]; base=16) / 255.0
+        b = parse(Int, s[5:6]; base=16) / 255.0
+        return RGB{Float64}(r, g, b)
     catch
-        h = replace(hex, "#" => "")
-        if length(h) == 3
-            h = string(h[1], h[1], h[2], h[2], h[3], h[3])
-        end
-        if length(h) == 6
-            r = parse(Int, h[1:2], base=16) / 255
-            g = parse(Int, h[3:4], base=16) / 255
-            b = parse(Int, h[5:6], base=16) / 255
-            return RGB{Float64}(r, g, b)
-        end
-        return RGB{Float64}(0, 0, 0)
+        return RGB(0.0, 0.0, 0.0)
     end
 end
 
@@ -194,6 +188,79 @@ function safe_parse_float(entry::GtkEntry)
     end
     v = tryparse(Float64, txt)
     return v
+end
+
+# --- ADDED: parse user X list and snapping helper ---
+"""
+Parse a user-entered list of X values.
+
+Accepts comma- or semicolon-separated numeric tokens (whitespace tolerated),
+e.g. "1, 2,3.5; 4". Invalid tokens are ignored. Returns a sorted, unique
+Vector{Float64}.
+
+Arguments:
+- `txt::AbstractString` : raw user input from the Snap Xs entry.
+
+Returns:
+- `Vector{Float64}` : sorted unique floats (may be empty if no valid tokens).
+"""
+function parse_x_list(txt::AbstractString)::Vector{Float64}
+    s = String(txt)
+    if isempty(strip(s))
+        return Float64[]
+    end
+    # Use a liberal numeric regex to find floats (supports scientific notation).
+    re = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
+    vals = Float64[]
+    for m in eachmatch(re, s)
+        v = try
+            parse(Float64, m.match)
+        catch
+            nothing
+        end
+        if v !== nothing
+            push!(vals, v)
+        end
+    end
+    return sort(collect(unique(vals)))
+end
+
+"""
+Snap all dataset points' X coordinates to the nearest value in `xs`.
+
+This operation modifies `state.datasets` in-place and returns the number of points changed.
+
+Notes:
+- Use `Place Snap Lines` first (or ensure calibration is applied) to visualize the
+  vertical guide lines; snapping itself only requires the numeric list `xs`.
+- If you want a tolerance so points snap only if within a maximum delta, add a
+  wrapper that filters `xs` or modify this function (not done here to keep UI
+  behavior explicit).
+
+Arguments:
+- `state::AppState` : application state (datasets are modified in-place).
+- `xs::Vector{Float64}` : target X grid values to snap to.
+
+Returns:
+- `Int` : number of datapoints whose X coordinate changed.
+"""
+function snap_points_to_xs!(state::AppState, xs::Vector{Float64})::Int
+    if isempty(xs)
+        return 0
+    end
+    changed = 0
+    for ds in state.datasets
+        for i in eachindex(ds.points)
+            oldx, oldy = ds.points[i]
+            idx = argmin(abs.(xs .- oldx))
+            nearest = xs[idx]
+            if nearest != oldx
+                ds.points[i] = (nearest, oldy)
+                changed += 1
+            end
+        end
+    end
+    return changed
 end
 
 """
@@ -388,12 +455,19 @@ function ensure_readme()
     3. Enter numeric X/Y min and max values in the boxes and click **Apply Calibration**.
     4. Add points by left-clicking on the graph; right-click near a point to delete it.
     5. Use **Auto Trace Active Dataset** to extract points along a curve color-matched to the dataset color.
-    6. Save your datasets as JSON or CSV using the toolbar, File menu, or keyboard shortcuts:
+    6. Snap X workflow (new):
+       - Enter a comma/semicolon-separated list of X values into the **Snap Xs:** entry (e.g. `0, 1, 2.5, 4`).
+       - Press **Place Snap Lines** to show vertical stippled guide lines at those X values (requires calibration to be applied so data-to-canvas mapping exists).
+       - Press **Snap Datapoints to X** to snap every datapoint from all datasets to the nearest provided X value. This operation only changes the X coordinate of points; Y values are preserved.
+       - If you prefer, enter the X list then press **Snap Datapoints to X** directly (the app will use the parsed list or previously stored values).
+       - The UI shows a status message indicating how many points were snapped.
+    7. Save your datasets as JSON or CSV using the toolbar, File menu, or keyboard shortcuts:
        - Primary+S (Ctrl+S on Windows and Linux) — Save JSON
        - Primary+Shift+S — Save CSV
 
     Notes:
-    - When a file chooser dialog is unavailable, the app will fall back to saving files into your Downloads directory using the image Title as the filename when provided.
+    - Calibration is required for placing guide lines and for accurate data<->canvas transforms. Snapping uses the numeric X values you provide and will operate on all datasets.
+    - If a save/open dialog is unavailable, the app will fall back to saving files into your Downloads directory using the image Title as the filename when provided.
     - The app keeps datasets independent; switch active dataset via the dataset combo box.
 
     ## File format
@@ -991,6 +1065,49 @@ Intended to be called from a canvas draw callback. The function expects the
 Cairo context `cr` and the `AppState` describing current application state.
 """
 function draw_canvas(state::AppState, cr)
+    # Before any drawing that depends on calibration anchors, detect scale/offset changes
+    # and re-map stored calibration pixel anchors so they stay visually attached to the image
+    # instead of drifting when the window is moved or resized.
+    if state.img_surface !== nothing
+        # Compute prospective new scale & offsets (duplicate logic used later)
+        cw = Gtk.width(state.canvas)
+        ch = Gtk.height(state.canvas)
+        if cw > 0 && ch > 0 && state.img_w > 0 && state.img_h > 0
+            new_scale = compute_display_scale(state)
+            tx = (cw - state.img_w * new_scale) / 2.0
+            ty = (ch - state.img_h * new_scale) / 2.0
+            scale_changed = new_scale != state.previous_display_scale
+            offset_changed = (tx != state.previous_offset_x) || (ty != state.previous_offset_y)
+            if (scale_changed || offset_changed) && state.previous_display_scale > 0
+                # λ maps a previous anchor (ax, ay) from old to new canvas coords
+                function _remap(ax::Float64, ay::Float64)
+                    # Translate back to unscaled image coordinates using previous transform
+                    ux = (ax - state.previous_offset_x) / state.previous_display_scale
+                    uy = (ay - state.previous_offset_y) / state.previous_display_scale
+                    # Forward map with new transform
+                    nx = tx + ux * new_scale
+                    ny = ty + uy * new_scale
+                    return (nx, ny)
+                end
+                if state.px_xmin !== nothing
+                    state.px_xmin = _remap(state.px_xmin[1], state.px_xmin[2])
+                end
+                if state.px_xmax !== nothing
+                    state.px_xmax = _remap(state.px_xmax[1], state.px_xmax[2])
+                end
+                if state.px_ymin !== nothing
+                    state.px_ymin = _remap(state.px_ymin[1], state.px_ymin[2])
+                end
+                if state.px_ymax !== nothing
+                    state.px_ymax = _remap(state.px_ymax[1], state.px_ymax[2])
+                end
+            end
+            # Update snapshot (done even if unchanged so first pass initializes them)
+            state.previous_display_scale = new_scale
+            state.previous_offset_x = tx
+            state.previous_offset_y = ty
+        end
+    end
     Cairo.set_source_rgb(cr, 1, 1, 1)
     Cairo.paint(cr)
     if state.image === nothing || state.img_surface === nothing
@@ -1031,6 +1148,37 @@ function draw_canvas(state::AppState, cr)
             Cairo.arc(cr, p[1], p[2], 5.0, 0, 2pi)
             Cairo.fill(cr)
         end
+    end
+
+    # Draw user-provided vertical snap lines (stippled) if any and if calibrated
+    try
+        if state.show_snap_lines && !isempty(state.x_snap_values) &&
+           state.px_xmin !== nothing && state.px_xmax !== nothing &&
+           state.px_ymin !== nothing && state.px_ymax !== nothing
+            # dashed/stipple style
+            try
+                Cairo.set_dash(cr, [6.0, 6.0], 0.0)
+            catch
+            end
+            Cairo.set_source_rgba(cr, 0.0, 0.0, 0.0, 0.6)
+            for xv in state.x_snap_values
+                # map data x to canvas coordinates; use data_to_canvas to get canvas x
+                cx, _ = data_to_canvas(state, xv, state.y_min)
+                # compute top and bottom canvas y
+                _, ytop = data_to_canvas(state, xv, state.y_max)
+                _, ybot = data_to_canvas(state, xv, state.y_min)
+                Cairo.move_to(cr, cx, ytop)
+                Cairo.line_to(cr, cx, ybot)
+                Cairo.stroke(cr)
+            end
+            # reset dash
+            try
+                Cairo.set_dash(cr, [], 0.0)
+            catch
+            end
+        end
+    catch
+        # ignore drawing errors for guide lines
     end
 
     if state.calibration_mode && !isempty(state.calib_clicks)
@@ -1992,6 +2140,23 @@ function create_app()
     Gtk.set_gtk_property!(ds_color_entry, :text, DEFAULT_COLORS[1])
     push!(ds_box, ds_color_entry)
 
+    # New: X snap values entry and apply button (comma-separated)
+    xvals_label = GtkLabel("Snap Xs:")
+    try
+        Gtk.set_gtk_property!(xvals_label, :width_request, 70)
+    catch
+    end
+    xvals_entry = GtkEntry()
+    Gtk.set_gtk_property!(xvals_entry, :text, "")
+    push!(ds_box, xvals_label)
+    push!(ds_box, xvals_entry)
+
+    place_snap_btn = GtkButton("Place Snap Lines")
+    push!(ds_box, place_snap_btn)
+
+    snap_points_btn = GtkButton("Snap Datapoints to X")
+    push!(ds_box, snap_points_btn)
+
     delete_btn = GtkButton("Delete Selected Point")
     push!(ds_box, delete_btn)
 
@@ -2002,7 +2167,7 @@ function create_app()
     catch
         # best-effort fallback: some Gtk versions may not accept :can_focus property
     end
-    Gtk.set_gtk_property!(canvas, :width_request, 1000)
+    Gtk.set_gtk_property!(canvas, :width_request,  1000)
     Gtk.set_gtk_property!(canvas, :height_request, 520)
     push!(mainbox, canvas)
 
@@ -2022,20 +2187,31 @@ function create_app()
         38.0,          # zoom_radius_px (approx 1 cm at ~96 DPI)
         6.0,           # zoom_level
         false,         # modal_active
-        false, Tuple{Float64,Float64}[])
+        false, Tuple{Float64,Float64}[],
+        # previous_display_scale / previous_offset_x / previous_offset_y
+        1.0, 0.0, 0.0,
+        # NEW required fields for AppState
+        Float64[],     # x_snap_values
+        true)          # show_snap_lines (initially show guides)
 
     for i in 1:MAX_DATASETS
         ds = Dataset("Dataset $i", DEFAULT_COLORS[i], hex_to_rgb(DEFAULT_COLORS[i]), Tuple{Float64,Float64}[])
         push!(state.datasets, ds)
     end
 
+    # initialize snap list state
+    state.x_snap_values = Float64[]
+    state.show_snap_lines = true
+
     # Callbacks
     Gtk.signal_connect(load_btn, "clicked") do _
+        # Accept PNG, JPEG, BMP, TIFF, WEBP
+        img_filters = ["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tif", "*.tiff", "*.webp"]
         fname = try
-            open_dialog("Open Image", state.win, ["*.png", "*.jpg", "*.jpeg"])
+            open_dialog("Open Image", state.win, img_filters)
         catch
             try
-                safe_open_dialog(state, "Open Image", state.win, ["*.png", "*.jpg", "*.jpeg"])
+                safe_open_dialog(state, "Open Image", state.win, img_filters)
             catch
                 ""
             end
@@ -2044,6 +2220,7 @@ function create_app()
         if fname != ""
             try
                 img = load(fname)
+               
                 state.image = img
                 size_tuple = size(img)
                 state.img_h = size_tuple[1]
@@ -2126,20 +2303,68 @@ function create_app()
         end
     end
 
-    Gtk.signal_connect(auto_trace_btn, "clicked") do _
-        if state.image === nothing
-            set_label(state.status_label, "Load an image first")
-            return
+    Gtk.signal_connect(xvals_entry, "activate") do widget
+        txt = try
+            Gtk.get_gtk_property(widget, :text, String)
+        catch
+            ""
         end
+        # only store parsed X list; placement and snapping are separate actions
+        xs = parse_x_list(txt)
+        state.x_snap_values = xs
+        if isempty(xs)
+            set_label(state.status_label, "No valid X values found.")
+        else
+            set_label(state.status_label, "Registered $(length(xs)) snap X value(s). Use 'Place Snap Lines' to show guides or 'Snap Datapoints to X' to snap points.")
+        end
+        draw(canvas)
+    end
+
+    # Place vertical guide lines at parsed X values (requires calibration)
+    Gtk.signal_connect(place_snap_btn, "clicked") do _
         if state.px_xmin === nothing || state.px_xmax === nothing || state.px_ymin === nothing || state.px_ymax === nothing
-            set_label(state.status_label, "Please perform calibration before auto-trace")
+            set_label(state.status_label, "Please perform calibration before placing snap lines.")
             return
         end
-        ds = state.datasets[state.active_dataset]
-        target_rgb = hex_to_rgb(ds.color)
-        sampled = auto_trace_scan(state, target_rgb)
-        state.datasets[state.active_dataset].points = sampled
-        set_label(state.status_label, "Auto-trace completed – $(length(sampled)) points")
+        txt = try
+            Gtk.get_gtk_property(xvals_entry, :text, String)
+        catch
+            ""
+        end
+        xs = parse_x_list(txt)
+        if isempty(xs)
+            set_label(state.status_label, "No valid X values to place.")
+            return
+        end
+        state.x_snap_values = xs
+        state.show_snap_lines = true
+        set_label(state.status_label, "Placed $(length(xs)) snap line(s).")
+        draw(canvas)
+    end
+
+    # Snap all datapoints (all datasets) to nearest parsed X values
+    Gtk.signal_connect(snap_points_btn, "clicked") do _
+        if state.px_xmin === nothing || state.px_xmax === nothing || state.px_ymin === nothing || state.px_ymax === nothing
+            set_label(state.status_label, "Please perform calibration before snapping points.")
+            return
+        end
+        # Prefer the entry text (latest) but fall back to stored values
+        txt = try
+            Gtk.get_gtk_property(xvals_entry, :text, String)
+        catch
+            ""
+        end
+        xs = parse_x_list(txt)
+        if isempty(xs)
+            xs = state.x_snap_values
+        end
+        if isempty(xs)
+            set_label(state.status_label, "No valid X values to snap to.")
+            return
+        end
+        state.x_snap_values = xs
+        changed = snap_points_to_xs!(state, xs)
+        set_label(state.status_label, "Snapped $(changed) point(s) to nearest X values.")
         draw(canvas)
     end
 
