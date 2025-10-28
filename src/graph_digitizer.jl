@@ -33,7 +33,7 @@ using Dates
 # --------------------------
 # Constants & Types
 # --------------------------
-const APP_VERSION = "1.0.0"
+const APP_VERSION = "1.2.0-beta"
 const MAX_DATASETS = 6
 const DEFAULT_COLORS = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#F0E442", "#56B4E9"]
 
@@ -1332,13 +1332,54 @@ Arguments:
 - `fname::String` : destination filename (should end in .csv).
 """
 function export_csv(state::AppState, fname::String)
-    rows = DataFrame(dataset=String[], x=Float64[], y=Float64[])
+    # Gather all unique X values from every dataset (sorted)
+    xs = Float64[]
     for ds in state.datasets
         for p in ds.points
-            push!(rows, (ds.name, p[1], p[2]))
+            push!(xs, p[1])
         end
     end
-    CSV.write(fname, rows)
+    xs = sort(unique(xs))
+
+    # Build columns: first column "x", then one column per dataset containing y or missing
+    cols = Dict{Symbol,Any}()
+    cols[:x] = xs
+
+    # Helper to produce a safe, unique symbol for the DataFrame column name
+    function _unique_colsym(base::AbstractString, existing::Dict{Symbol,Any})
+        # replace non-word chars with underscore
+        s = replace(String(base), r"[^\w]" => "_")
+        if isempty(s)
+            s = "dataset"
+        end
+        sym = Symbol(s)
+        i = 1
+        while haskey(existing, sym)
+            sym = Symbol(string(s, "_", i))
+            i += 1
+        end
+        return sym
+    end
+
+    for ds in state.datasets
+        col_sym = _unique_colsym(ds.name, cols)
+        col = Vector{Union{Missing,Float64}}(undef, length(xs))
+        for (j, x) in enumerate(xs)
+            # find exact-match x in dataset points
+            found_y = nothing
+            for p in ds.points
+                if p[1] == x
+                    found_y = p[2]
+                    break
+                end
+            end
+            col[j] = found_y === nothing ? missing : found_y
+        end
+        cols[col_sym] = col
+    end
+
+    df = DataFrame(cols)
+    CSV.write(fname, df)
 end
 
 """
@@ -2220,7 +2261,7 @@ function create_app()
         if fname != ""
             try
                 img = load(fname)
-               
+
                 state.image = img
                 size_tuple = size(img)
                 state.img_h = size_tuple[1]
@@ -2424,11 +2465,15 @@ function create_app()
 
         found = find_nearest_point(state, x, y, 8.0)
         if event.button == 1
-            if found !== nothing
+            # Only start dragging if the nearest point belongs to the active dataset.
+            if found !== nothing && found[1] == state.active_dataset
                 state.dragging = true
                 state.drag_idx = found
                 set_label(state.status_label, "Selected point for dragging (dataset $(found[1]), point $(found[2]))")
             else
+                # Either there was no nearby point, or it belongs to a different dataset.
+                # In both cases, add a new point to the active dataset so identical (x,y)
+                # points can coexist across datasets.
                 dx, dy = canvas_to_data(state, x, y)
                 push!(state.datasets[state.active_dataset].points, (dx, dy))
                 set_label(state.status_label, "Added point: ($(dx), $(dy))")
