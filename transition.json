@@ -1,0 +1,152 @@
+{
+  "title": "Migrate Graph_Digitizer from Gtk (Gtk.jl) to mousetrap.jl (GTK4)",
+  "goal": "Upgrade the UI to GTK4 by replacing Gtk.jl usage with mousetrap.jl while preserving behavior, improving input handling, and enabling GTK4 features.",
+  "assumptions": [
+    "mousetrap.jl provides GTK4-compatible widget wrappers and event APIs needed by the app.",
+    "Existing codebase runs under Julia >= 1.8 and can update Project.toml.",
+    "No backend changes required for image IO (ImageIO, ImageCore) beyond API surface.",
+    "User will run manual UI tests after automated tests pass."
+  ],
+  "prerequisites": [
+    "Create a git branch for migration (e.g. migrate/mousetrap-gtk4) and ensure CI is green before starting.",
+    "Add automated tests or snapshots for key UI flows where possible (headless unit tests for non-GUI logic).",
+    "Install mousetrap.jl locally and inspect its API docs to confirm widget/event names."
+  ],
+  "high_level_steps": [
+    {
+      "id": 1,
+      "title": "Audit current Gtk usage",
+      "actions": [
+        "Search repository for all uses of Gtk, Gtk.* types, Gtk.* functions, and Gtk property helpers.",
+        "List files and exact symbols used (e.g., GtkWindow, GtkCanvas, GtkEntry, GtkLabel, Gtk.accelerator_parse, Gtk.get_gtk_property)."
+      ],
+      "files_to_scan": ["src/**/*.jl"]
+    },
+    {
+      "id": 2,
+      "title": "Create compatibility mapping",
+      "actions": [
+        "For each Gtk symbol found, map to mousetrap.jl (or Gtk4.jl) equivalent. If mousetrap wraps Gtk4 API names differ, document exact replacement.",
+        "Document replacement patterns for constructors, property access, signal connections, and accelerator handling."
+      ],
+      "deliverable": "api_mapping.json"
+    },
+    {
+      "id": 3,
+      "title": "Update Project.toml and pin dependencies",
+      "actions": [
+        "Add mousetrap.jl to Project.toml and remove or co-exist with Gtk.jl during transition.",
+        "Run `] resolve` and ensure CI toolchain supports the new deps."
+      ],
+      "commands": [
+        "git checkout -b migrate/mousetrap-gtk4",
+        "jul ia --project=@. -e 'using Pkg; Pkg.add(\"mousetrap\")'"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Implement API replacements incrementally",
+      "actions": [
+        "Start with low-risk modules (helpers, export, non-GUI logic) to ensure tests still pass.",
+        "Replace widget constructors and property calls in create_app() and AppState definitions.",
+        "Replace drawing canvas usage: migrate GtkCanvas -> mousetrap DrawingArea / GTK4 drawing surface and adapt draw callback signature.",
+        "Replace event handlers and signal connects (mouse, keyboard) with mousetrap equivalents.",
+        "Refactor accelerator/AccelGroup code to mousetrap's keybinding API or GTK4 equivalent."
+      ],
+      "files_to_edit": ["src/graph_digitizer.jl"]
+    },
+    {
+      "id": 5,
+      "title": "Refactor AppState and type annotations",
+      "actions": [
+        "Update AppState fields to reference new widget types or keep as Any where appropriate to reduce churn.",
+        "Document transient fields that change semantics with GTK4 (e.g., canvas measurement APIs)."
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Adjust drawing pipeline",
+      "actions": [
+        "Ensure image_to_surface and Cairo usage are compatible with GTK4 drawing model; replace surface creation if mousetrap provides helpers.",
+        "Update compute_display_scale/draw_canvas to use new drawing coordinate transforms if needed."
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Rewire dialogs and file choosers",
+      "actions": [
+        "Replace safe_open_dialog / safe_save_dialog implementations to use mousetrap/GTK4 dialogs and ensure modal behavior is preserved.",
+        "Retain fallback behavior to preferred downloads dir when dialogs unavailable."
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Test and iterate",
+      "actions": [
+        "Run unit tests for non-GUI logic.",
+        "Perform manual smoke tests: load image, calibrate, add points, auto-trace, snap X, export CSV/JSON, exit flow.",
+        "Address regressions and edge-cases."
+      ],
+      "acceptance_criteria": [
+        "App launches and shows image.",
+        "Calibration and point placement behave as before.",
+        "Auto-trace produces comparable results.",
+        "CSV/JSON export formats unchanged except for UI framework migration.",
+        "All major UI shortcuts/accelerators function."
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Cleanup and finalize",
+      "actions": [
+        "Remove unused Gtk.jl imports and dead code.",
+        "Update README with GTK4 requirement and any user-notes for changes.",
+        "Run full CI and create PR for review."
+      ]
+    }
+  ],
+  "api_mappings_sample": [
+    {
+      "from": "GtkWindow / Gtk.Entry / Gtk.Label / Gtk.Button / Gtk.Box / GtkGrid",
+      "to": "mousetrap.Window / mousetrap.Entry / mousetrap.Label / mousetrap.Button / mousetrap.Box / mousetrap.Grid (or the exact Gtk4 equivalents exposed by mousetrap.jl)."
+    },
+    {
+      "from": "GtkCanvas (custom draw)",
+      "to": "mousetrap DrawingArea or Gtk4.DrawingArea with new draw callback signature; adapt Cairo surface usage accordingly."
+    },
+    {
+      "from": "Gtk.accelerator_parse / AccelGroup / add_accelerator",
+      "to": "mousetrap keybinding API or Gtk4 native keybind API exposed by mousetrap.jl; use mousetrap's preferred method for global/local accelerators."
+    },
+    {
+      "from": "Gtk.get_gtk_property / Gtk.set_gtk_property!",
+      "to": "Use property getters/setters from mousetrap/Julia wrappers or generic `getproperty`/`setproperty!` patterns; prefer explicit API calls where available."
+    }
+  ],
+  "testing_plan": {
+    "unit": [
+      "Add tests for parse_x_list, snap_points_to_xs!, export_csv, export_json, data/canvas transforms.",
+      "Mock AppState where necessary."
+    ],
+    "integration": [
+      "Manual UI checklist covering image load, calibration, point edit, auto-trace, snapping, and exports.",
+      "Record a short test script (steps) for QA to reproduce."
+    ]
+  },
+  "rollback_strategy": [
+    "If migration breaks critical functionality, revert the branch and open a task list for targeted fixes.",
+    "Keep old Gtk-based branch available until GTK4 version passes QA."
+  ],
+  "risks_and_mitigations": [
+    {
+      "risk": "API mismatch between Gtk.jl and mousetrap.jl",
+      "mitigation": "Keep thin adapter wrappers that translate old helper calls to the new API to minimize changes across the codebase."
+    },
+    {
+      "risk": "Drawing behavior change (coordinate transforms / DPI / scaling)",
+      "mitigation": "Create visual regression checks and sample images to compare output before/after; adjust transforms accordingly."
+    }
+  ],
+  "estimated_effort_hours": 12,
+  "notes": "Before making code edits, verify mousetrap.jl public API names and adjust mapping accordingly. Prefer incremental commits with small, testable changes."
+}

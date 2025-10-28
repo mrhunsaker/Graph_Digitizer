@@ -13,6 +13,8 @@
 # limitations under the License.
 #
 
+__precompile__(false)
+
 module GraphDigitizerCore
 
 # Headless core utilities for GraphDigitizer

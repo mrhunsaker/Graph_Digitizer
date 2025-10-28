@@ -19,6 +19,7 @@ ImageIO = "82e4d734-157c-48bb-816b-45c225c6df19"
 ImageMagick = "6218d12a-5da1-5696-b52f-db25d2ecc6d1"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 
+
 [compat]
 CSV = "0.10.15"
 Cairo = "1.1.1"
@@ -32,3 +33,4 @@ ImageCore = "0.10.5"
 ImageIO = "0.6.9"
 ImageMagick = "1.4.2"
 JSON = "0.21.4"
+

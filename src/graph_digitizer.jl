@@ -2261,7 +2261,7 @@ function create_app()
         if fname != ""
             try
                 img = load(fname)
-               
+
                 state.image = img
                 size_tuple = size(img)
                 state.img_h = size_tuple[1]
@@ -2465,11 +2465,15 @@ function create_app()
 
         found = find_nearest_point(state, x, y, 8.0)
         if event.button == 1
-            if found !== nothing
+            # Only start dragging if the nearest point belongs to the active dataset.
+            if found !== nothing && found[1] == state.active_dataset
                 state.dragging = true
                 state.drag_idx = found
                 set_label(state.status_label, "Selected point for dragging (dataset $(found[1]), point $(found[2]))")
             else
+                # Either there was no nearby point, or it belongs to a different dataset.
+                # In both cases, add a new point to the active dataset so identical (x,y)
+                # points can coexist across datasets.
                 dx, dy = canvas_to_data(state, x, y)
                 push!(state.datasets[state.active_dataset].points, (dx, dy))
                 set_label(state.status_label, "Added point: ($(dx), $(dy))")
