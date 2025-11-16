@@ -1341,41 +1341,47 @@ function export_csv(state::AppState, fname::String)
     end
     xs = sort(unique(xs))
 
-    # Build columns: first column "x", then one column per dataset containing y or missing
-    cols = Dict{Symbol,Any}()
-    cols[:x] = xs
+    # Build columns: first column "x", then one column per dataset containing y or missing.
+    # Use dataset names as column headers (sanitized to avoid empty names or duplicates).
+    cols = Dict{String,Any}()
+    cols["x"] = xs
 
-    # Helper to produce a safe, unique symbol for the DataFrame column name
-    function _unique_colsym(base::AbstractString, existing::Dict{Symbol,Any})
-        # replace non-word chars with underscore
+    function _unique_colname(base::AbstractString, existing::Dict{String,Any})
+        # sanitize: replace non-word chars with underscore
         s = replace(String(base), r"[^\w]" => "_")
-        if isempty(s)
-            s = "dataset"
-        end
-        sym = Symbol(s)
+        s = isempty(s) ? "dataset" : s
+        candidate = s
         i = 1
-        while haskey(existing, sym)
-            sym = Symbol(string(s, "_", i))
+        while haskey(existing, candidate)
+            candidate = string(s, "_", i)
             i += 1
         end
-        return sym
+        return candidate
     end
 
+    # Tolerance for matching X values (relative-ish): helps when floats differ slightly
     for ds in state.datasets
-        col_sym = _unique_colsym(ds.name, cols)
+        col_name = _unique_colname(ds.name, cols)
         col = Vector{Union{Missing,Float64}}(undef, length(xs))
+
+        # Extract arrays for faster access
+        ds_xs = [p[1] for p in ds.points]
+        ds_ys = [p[2] for p in ds.points]
+
         for (j, x) in enumerate(xs)
-            # find exact-match x in dataset points
-            found_y = nothing
-            for p in ds.points
-                if p[1] == x
-                    found_y = p[2]
-                    break
+            found = missing
+            if !isempty(ds_xs)
+                # compute nearest index
+                diffs = abs.(ds_xs .- x)
+                min_diff, idx = findmin(diffs)
+                tol = 1e-8 * max(1.0, abs(x))
+                if min_diff <= tol
+                    found = ds_ys[idx]
                 end
             end
-            col[j] = found_y === nothing ? missing : found_y
+            col[j] = found
         end
-        cols[col_sym] = col
+        cols[col_name] = col
     end
 
     df = DataFrame(cols)
@@ -1457,19 +1463,33 @@ function confirm_exit_and_maybe_save(state::AppState)::Bool
     # will show a file chooser when possible and otherwise provide a sensible fallback.
     if dlg === nothing
         try
-            fname = safe_save_dialog(state, "Save JSON File", state.win, ["*.json"])
+            # Prompt for a JSON filename; we'll write both JSON and CSV using the
+            # chosen directory and a timestamped basename so the two files are grouped.
+            fname = safe_save_dialog(state, "Save JSON File (CSV will also be written)", state.win, ["*.json"])
             if fname != ""
-                if !endswith(lowercase(fname), ".json")
-                    fname *= ".json"
-                end
+                dir = dirname(fname)
+                base = splitext(basename(fname))[1]
+                ts = Dates.format(Dates.now(), "yyyy-mm-dd_HHMMSS")
+                base_ts = string(base, "_", ts)
+                json_fname = joinpath(dir, string(base_ts, ".json"))
+                csv_fname = joinpath(dir, string(base_ts, ".csv"))
                 try
-                    export_json(state, fname)
-                    set_label(state.status_label, "No dialog available; saved JSON to: $fname")
+                    export_json(state, json_fname)
+                    # attempt CSV as well
+                    try
+                        export_csv(state, csv_fname)
+                        set_label(state.status_label, "No dialog available; saved JSON to: $json_fname; CSV to: $csv_fname")
+                        return true
+                    catch e
+                        set_label(state.status_label, "Saved JSON to: $json_fname; CSV failed: $e")
+                        return false
+                    end
                 catch e
                     try
                         set_label(state.status_label, "Save failed during fallback: $e")
                     catch
                     end
+                    return false
                 end
             else
                 # The save helper returned no filename (user cancelled or helper failed).
@@ -1478,15 +1498,15 @@ function confirm_exit_and_maybe_save(state::AppState)::Bool
                     set_label(state.status_label, "No dialog available and save was cancelled.")
                 catch
                 end
+                return true
             end
         catch e
             try
                 set_label(state.status_label, "No dialog available and fallback save failed: $e")
             catch
             end
+            return false
         end
-        # Allow the application to close (Exit / Ctrl+Q should still close the app).
-        return true
     end
 
     try
@@ -1550,19 +1570,30 @@ function confirm_exit_and_maybe_save(state::AppState)::Bool
     end
 
     if resp == Gtk.ResponseType.YES || (isdefined(Gtk, :RESPONSE_YES) && resp == Gtk.RESPONSE_YES) || resp == Gtk.ResponseType(6)
-        fname = safe_save_dialog(state, "Save JSON File", state.win, ["*.json"])
+        # Ask for a JSON filename, then write both JSON and CSV with a timestamped base
+        fname = safe_save_dialog(state, "Save JSON File (CSV will also be written)", state.win, ["*.json"])
         if fname == ""
             return false
         end
-        if !endswith(lowercase(fname), ".json")
-            fname *= ".json"
-        end
+        dir = dirname(fname)
+        base = splitext(basename(fname))[1]
+        ts = Dates.format(Dates.now(), "yyyy-mm-dd_HHMMSS")
+        base_ts = string(base, "_", ts)
+        json_fname = joinpath(dir, string(base_ts, ".json"))
+        csv_fname = joinpath(dir, string(base_ts, ".csv"))
         try
-            export_json(state, fname)
+            export_json(state, json_fname)
         catch e
             set_label(state.status_label, "Failed to save JSON: $e")
             return false
         end
+        try
+            export_csv(state, csv_fname)
+        catch e
+            set_label(state.status_label, "Saved JSON to: $json_fname; CSV failed: $e")
+            return false
+        end
+        set_label(state.status_label, "Saved JSON to: $json_fname; CSV to: $csv_fname")
         return true
     elseif resp == Gtk.ResponseType.NO || (isdefined(Gtk, :RESPONSE_NO) && resp == Gtk.RESPONSE_NO) || resp == Gtk.ResponseType(5)
         return true
@@ -2666,35 +2697,11 @@ function create_app()
 
         # Handle Delete/Backspace already covered by buttonless event earlier; but keep other shortcuts:
         if primary && ch == 'S'
-            # Primary+S -> Save JSON; Primary+Shift+S -> Save CSV
-            if shift
-                # Save CSV
-                fname = safe_save_dialog(state, "Save CSV File", state.win, ["*.csv"])
-                if fname != ""
-                    if !endswith(lowercase(fname), ".csv")
-                        fname *= ".csv"
-                    end
-                    try
-                        export_csv(state, fname)
-                        set_label(state.status_label, "Saved CSV to: $fname")
-                    catch e
-                        set_label(state.status_label, "CSV save failed: $e")
-                    end
-                end
-            else
-                # Save JSON
-                fname = safe_save_dialog(state, "Save JSON File", state.win, ["*.json"])
-                if fname != ""
-                    if !endswith(lowercase(fname), ".json")
-                        fname *= ".json"
-                    end
-                    try
-                        export_json(state, fname)
-                        set_label(state.status_label, "Saved JSON to: $fname")
-                    catch e
-                        set_label(state.status_label, "JSON save failed: $e")
-                    end
-                end
+            # Primary+S and Primary+Shift+S both trigger the combined save (JSON+CSV)
+            try
+                handler_save_both()
+            catch e
+                set_label(state.status_label, "Save failed: $e")
             end
             return true
         elseif primary && ch == 'Q'
@@ -2712,36 +2719,44 @@ function create_app()
     end
 
     # Wire up Save / Export / Exit actions for buttons and menu items (best-effort)
-    handler_save_json = function (_=nothing)
-        fname = safe_save_dialog(state, "Save JSON File", state.win, ["*.json"])
+    # Combined save: save both JSON and CSV. Filenames will include a timestamp
+    # appended to the basename to help track exports. The user is prompted once
+    # (JSON dialog); the CSV is written to the same directory with the same
+    # sanitized base name and a `.csv` extension.
+    handler_save_both = function (_=nothing)
+        # Prompt for JSON filename (will also determine CSV path)
+        fname = safe_save_dialog(state, "Save JSON File (CSV will also be written)", state.win, ["*.json"]) 
         if fname == ""
             return
         end
-        if !endswith(lowercase(fname), ".json")
-            fname *= ".json"
-        end
+
+        # Ensure directory and base name
+        dir = dirname(fname)
+        base = splitext(basename(fname))[1]
+
+        # Append timestamp to base name
+        ts = Dates.format(Dates.now(), "yyyy-mm-dd_HHMMSS")
+        base_ts = string(base, "_", ts)
+
+        json_fname = joinpath(dir, string(base_ts, ".json"))
+        csv_fname = joinpath(dir, string(base_ts, ".csv"))
+
+        # If the safe_save_dialog returned a path without extension, we still honor it
         try
-            export_json(state, fname)
-            set_label(state.status_label, "Saved JSON to: $fname")
+            export_json(state, json_fname)
         catch e
             set_label(state.status_label, "Failed to save JSON: $e")
-        end
-    end
-
-    handler_save_csv = function (_=nothing)
-        fname = safe_save_dialog(state, "Save CSV File", state.win, ["*.csv"])
-        if fname == ""
             return
         end
-        if !endswith(lowercase(fname), ".csv")
-            fname *= ".csv"
-        end
+
         try
-            export_csv(state, fname)
-            set_label(state.status_label, "Saved CSV to: $fname")
+            export_csv(state, csv_fname)
         catch e
-            set_label(state.status_label, "Failed to save CSV: $e")
+            set_label(state.status_label, "Saved JSON to: $json_fname; CSV failed: $e")
+            return
         end
+
+        set_label(state.status_label, "Saved JSON to: $json_fname; CSV to: $csv_fname")
     end
 
     handler_exit = function (_=nothing)
@@ -2754,7 +2769,7 @@ function create_app()
     try
         if save_json_btn !== nothing
             Gtk.signal_connect(save_json_btn, "clicked") do w
-                handler_save_json()
+                handler_save_both()
             end
         end
     catch
@@ -2762,7 +2777,7 @@ function create_app()
     try
         if save_csv_btn !== nothing
             Gtk.signal_connect(save_csv_btn, "clicked") do w
-                handler_save_csv()
+                handler_save_both()
             end
         end
     catch
@@ -2770,7 +2785,7 @@ function create_app()
     try
         if save_json_mi !== nothing
             Gtk.signal_connect(save_json_mi, "activate") do w
-                handler_save_json()
+                handler_save_both()
             end
         end
     catch
@@ -2778,7 +2793,7 @@ function create_app()
     try
         if save_csv_mi !== nothing
             Gtk.signal_connect(save_csv_mi, "activate") do w
-                handler_save_csv()
+                handler_save_both()
             end
         end
     catch

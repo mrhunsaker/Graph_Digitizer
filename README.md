@@ -111,24 +111,26 @@ A minimal workflow to digitize a plot:
 
 7. Save / Export
    - Use toolbar buttons, `File` menu, or keyboard accelerators:
-     - Primary+S (Ctrl+S on Windows and Linux) — Save JSON (metadata + datasets).
-     - Primary+Shift+S — Save CSV (rows: dataset, x, y).
+    - Primary+S (Ctrl+S on Windows and Linux) — Save JSON (metadata + datasets).
+    - Primary+Shift+S — Save CSV (wide format: `x` column followed by one column per dataset containing Y values).
    - A Save dialog will be used when available. If a dialog cannot be constructed (some Gtk.jl or environment combinations), the app falls back to writing into your Downloads folder (or system temp) using a generated filename and updates the status label with the full path used.
 
 File formats
 ------------
 JSON export
-- Contains metadata and datasets. Example structure:
+- The JSON export is the canonical, full-fidelity project save format. It contains application metadata (title, axis labels), numeric axis ranges, log-axis flags, and the full list of datasets. Each dataset includes its user-visible name, hex color, and the array of points stored in data coordinates.
 
-```Graph_Digitizer/README.md#L30-46
+- Example structure (fields produced by the app's `export_json` routine):
+
+```json
 {
-  "title": "...",
-  "xlabel": "...",
-  "ylabel": "...",
+  "title": "My Plot Title",
+  "xlabel": "Time (s)",
+  "ylabel": "Amplitude",
   "x_min": 0.0,
-  "x_max": 10.0,
-  "y_min": 0.0,
-  "y_max": 100.0,
+  "x_max": 100.0,
+  "y_min": -1.0,
+  "y_max": 1.0,
   "x_log": false,
   "y_log": false,
   "datasets": [
@@ -136,13 +138,73 @@ JSON export
       "name": "Dataset 1",
       "color": "#0072B2",
       "points": [[x1, y1], [x2, y2], ...]
+    },
+    {
+      "name": "Dataset 2",
+      "color": "#E69F00",
+      "points": [[x1, y1], [x2, y2], ...]
     }
   ]
 }
 ```
 
+- Notes about JSON:
+  - `x_log` / `y_log` are boolean flags indicating whether the corresponding axis is logarithmic (base 10). The stored `points` are always in data-space values (not pixel coordinates).
+  - `color` is a hex string (e.g. `#RRGGBB`) and `name` is the dataset label shown in the UI.
+  - The JSON writer uses `JSON.print` to write the file; IO errors will propagate if the file cannot be written.
+
 CSV export
-- Simple tabular export with columns: `dataset`, `x`, `y`. Each row represents one point.
+- The CSV export now produces a wide-format table to make re-plotting across datasets straightforward. The first column is `x` (the union of all X values present in any dataset, sorted). Each subsequent column is a dataset named by its user-visible name (sanitized to a filesystem/CSV-friendly header and made unique if necessary). Each row represents a single X value; the cell under a dataset column contains the Y value for that dataset at that X or is empty (`missing`) if the dataset has no point at that X.
+
+- Example structure (columns):
+
+```
+x,Dataset_1,Dataset_2
+0.0,0.1,-0.05
+1.0,0.15,
+```
+
+- Matching behavior and tolerance:
+  - The exporter builds the X axis as the sorted union of all X values across datasets.
+  - For each dataset and X, the exporter finds the nearest dataset X value and, if it is within a small relative tolerance (approximately 1e-8 * max(1, |x|)), treats it as the same X and writes the corresponding Y. This helps avoid missing values caused by tiny floating-point differences introduced by snapping or processing.
+  - If no matching X is found within the tolerance, the exporter writes an empty cell (`missing`) for that dataset/X pair.
+
+- Notes about CSV:
+  - The CSV writer uses `CSV.write` with a `DataFrame` assembled from the `x` column plus one column per dataset. IO errors will propagate on write failure.
+  - CSV does not include axis metadata or log flags; use JSON for full project metadata.
+
+Save / Export options and behavior
+---------------------------------
+- Export triggers: use toolbar/menu actions or keyboard accelerators:
+  - Primary+S — Save JSON (full project metadata + datasets)
+  - Primary+Shift+S — Save CSV (tabular: `dataset`, `x`, `y`)
+
+- Save dialog fallbacks:
+  - The app uses `safe_save_dialog` which attempts multiple Gtk file chooser APIs. If a native Save dialog cannot be created in the running environment, the app falls back to a sensible path (your `Downloads` folder when available, otherwise the system temporary directory) and writes the selected export there.
+  - When the fallback path is used the full destination filename is displayed in the app status label so you can retrieve the file.
+
+- Default filenames and sanitization:
+  - When the Save dialog falls back, a default filename is generated using the `Title` field (if provided) sanitized into a filesystem-safe base filename. The sanitizer replaces non-alphanumeric characters with underscores, collapses repeated underscores, and trims leading/trailing underscores/dots.
+  - If `Title` is empty, the app uses a timestamped name like `graphdigitizer_export_YYYY-MM-DD_HHMMSS`.
+  - The app ensures the chosen filename has the correct extension (appends `.json` or `.csv` if necessary).
+
+Advanced export-related features
+--------------------------------
+- Auto-trace & dataset replacement:
+  - The `Auto Trace Active Dataset` action scans pixel columns between the calibrated X anchors and selects the pixel row with minimal RGB distance to the active dataset's color. The resulting sampled data points replace the active dataset's point list and can then be exported.
+
+- Snap X values (batch modification):
+  - The app supports snapping all datasets' X coordinates to a user-provided list of X values (entered as comma/semicolon-separated numbers). Use the `Place Snap Lines` option to visualize vertical guide lines, then run the `Snap Points to Xs` action to modify stored data in-place. After snapping, export the modified datasets as usual (JSON/CSV).
+
+- Dataset limits and colors:
+  - The application defines `MAX_DATASETS = 6` and a `DEFAULT_COLORS` palette. Datasets are color-coded and the dataset color hex string is written into the JSON export so color associations are preserved.
+
+Retrieving exported files
+------------------------
+- If a native Save dialog was used, pick the path you chose in the dialog.
+- If the app fell back to writing into `Downloads` or the system temp directory, check the status label in the app for the full path written, or look in `~/Downloads` (or your platform's Downloads folder) for the generated filename.
+
+If you want more compact or custom CSV/JSON formats (for example adding dataset indexes, timestamps, or extra metadata), I can add a toggle or additional export routine — tell me which fields you want included.
 
 Default filename and fallback behavior
 --------------------------------------
